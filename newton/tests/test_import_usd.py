@@ -1715,6 +1715,100 @@ def Xform "Articulation" (
         self.assertAlmostEqual(float(damping[qd_start + 1]), 3.0, places=6)  # angular DOF
 
     @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_joint_state_angular_velocity_is_converted_to_radians(self):
+        """Authored degrees/sec joint-state velocities become rad/s. Linear velocities stay in m/s."""
+        from pxr import Usd, UsdGeom, UsdPhysics
+
+        from newton.usd import SchemaResolverNewton, SchemaResolverPhysx
+
+        stage = Usd.Stage.CreateInMemory()
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        UsdPhysics.Scene.Define(stage, "/physicsScene")
+        stage.GetRootLayer().ImportFromString(
+            """#usda 1.0
+        def Cube "HingeBody" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        ) {}
+        def PhysicsRevoluteJoint "hinge" {
+            rel physics:body1 = </HingeBody>
+            uniform token physics:axis = "Z"
+            float state:angular:physics:velocity = 180
+        }
+        def Cube "SlideBody" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        ) {}
+        def PhysicsPrismaticJoint "slide" {
+            rel physics:body1 = </SlideBody>
+            uniform token physics:axis = "X"
+            float state:linear:physics:velocity = 1.5
+        }
+        def Cube "D6Body" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        ) {}
+        def PhysicsJoint "d6" (
+            prepend apiSchemas = ["PhysicsLimitAPI:transX", "PhysicsLimitAPI:transY", "PhysicsLimitAPI:transZ", "PhysicsLimitAPI:rotX", "PhysicsLimitAPI:rotY", "PhysicsLimitAPI:rotZ"]
+        ) {
+            rel physics:body1 = </D6Body>
+            float limit:transX:physics:low = -1
+            float limit:transX:physics:high = 1
+            float limit:transY:physics:low = 1
+            float limit:transY:physics:high = -1
+            float limit:transZ:physics:low = 1
+            float limit:transZ:physics:high = -1
+            float limit:rotX:physics:low = 1
+            float limit:rotX:physics:high = -1
+            float limit:rotY:physics:low = 1
+            float limit:rotY:physics:high = -1
+            float limit:rotZ:physics:low = -1
+            float limit:rotZ:physics:high = 1
+            float state:rotZ:physics:velocity = 90
+            float state:transX:physics:velocity = 2.0
+        }
+        def Cube "MergeBody" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        ) {}
+        def PhysicsPrismaticJoint "mergeSlide" {
+            rel physics:body1 = </MergeBody>
+            uniform token physics:axis = "X"
+            float state:linear:physics:velocity = 0.25
+        }
+        def PhysicsRevoluteJoint "mergeHinge" {
+            rel physics:body1 = </MergeBody>
+            uniform token physics:axis = "Z"
+            float state:angular:physics:velocity = 180
+        }
+        """
+        )
+        # ImportFromString replaces the layer, so the scene defined above is dropped.
+        # Re-author the scene on the imported layer.
+        if not stage.GetPrimAtPath("/physicsScene"):
+            UsdPhysics.Scene.Define(stage, "/physicsScene")
+
+        builder = newton.ModelBuilder()
+        result = builder.add_usd(
+            stage,
+            schema_resolvers=[SchemaResolverNewton(), SchemaResolverPhysx()],
+            load_visual_shapes=False,
+        )
+        model = builder.finalize()
+        joint_qd = model.state().joint_qd.numpy()
+        qd_start = model.joint_qd_start.numpy()
+
+        def qd(path: str, offset: int = 0) -> float:
+            index = result["path_joint_map"][path]
+            return float(joint_qd[int(qd_start[index]) + offset])
+
+        deg = np.pi / 180.0
+        self.assertAlmostEqual(qd("/hinge"), 180.0 * deg, places=5)
+        self.assertAlmostEqual(qd("/slide"), 1.5, places=5)
+        # D6 DOF order is linear then angular.
+        self.assertEqual(builder.joint_dof_dim[builder.joint_label.index("/d6")], (1, 1))
+        self.assertAlmostEqual(qd("/d6", 1), 90.0 * deg, places=5)
+        self.assertEqual(result["path_joint_map"]["/mergeSlide"], result["path_joint_map"]["/mergeHinge"])
+        self.assertAlmostEqual(qd("/mergeSlide", 0), 0.25, places=5)
+        self.assertAlmostEqual(qd("/mergeHinge", 1), 180.0 * deg, places=5)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_merged_joint_gain_edit_before_solver_construction(self):
         """Verify that pre-solver gain edits promote merged USD joints to force space."""
         from pxr import Usd
