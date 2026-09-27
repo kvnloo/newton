@@ -846,8 +846,9 @@ class TestSchemaResolver(unittest.TestCase):
                 actual_pos = joint_q[q_start]
                 actual_vel = joint_qd[qd_start]
 
-                expected_pos_deg, expected_vel = expected_joint_values[joint_label]
+                expected_pos_deg, expected_vel_deg = expected_joint_values[joint_label]
                 expected_pos_rad = expected_pos_deg * (3.14159 / 180.0)
+                expected_vel = expected_vel_deg * (3.14159 / 180.0)
 
                 self.assertAlmostEqual(
                     actual_pos,
@@ -934,8 +935,9 @@ class TestSchemaResolver(unittest.TestCase):
 
                 # Validate each DOF against expected values
                 for dof_idx in range(min(dof_count, len(expected_values))):
-                    expected_pos_deg, expected_vel = expected_values[dof_idx]
+                    expected_pos_deg, expected_vel_deg = expected_values[dof_idx]
                     expected_pos_rad = expected_pos_deg * (3.14159 / 180.0)
+                    expected_vel = expected_vel_deg * (3.14159 / 180.0)
 
                     actual_pos = joint_q[q_start + dof_idx]
                     actual_vel = joint_qd[qd_start + dof_idx]
@@ -964,8 +966,9 @@ class TestSchemaResolver(unittest.TestCase):
         for i in range(model.joint_count):
             joint_type = joint_types[i]
             if joint_type == 1 and i in expected_revolute_joints:  # JointType.REVOLUTE
-                expected_pos_deg, expected_vel = expected_revolute_joints[i]
+                expected_pos_deg, expected_vel_deg = expected_revolute_joints[i]
                 expected_pos_rad = expected_pos_deg * (3.14159 / 180.0)
+                expected_vel = expected_vel_deg * (3.14159 / 180.0)
 
                 q_start = int(joint_q_start[i])
                 qd_start = int(joint_qd_start[i])
