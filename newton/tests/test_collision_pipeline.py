@@ -2479,6 +2479,60 @@ class TestShapePairsMaxScaling(unittest.TestCase):
         model.shape_world = None
         self.assertEqual(_compute_per_world_shape_pairs_max(model), 0)
 
+    def test_explicit_broad_phase_skips_discarded_pair_bound(self):
+        """Explicit construction must not compute the unused per-world pair bound."""
+        robot = newton.ModelBuilder()
+        body = robot.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 0.1), wp.quat_identity()))
+        robot.add_shape_sphere(body=body, radius=0.2)
+        robot.add_ground_plane()
+
+        scene = newton.ModelBuilder()
+        scene.add_world(robot)
+        scene.add_world(robot)
+        model = scene.finalize()
+
+        with mock.patch(
+            "newton._src.sim.collide._compute_per_world_shape_pairs_max",
+            side_effect=AssertionError("explicit broad phase must not compute the per-world pair bound"),
+        ):
+            pipeline = newton.CollisionPipeline(model, broad_phase="explicit", rigid_contact_max=16)
+
+        self.assertEqual(pipeline.shape_pairs_max, int(model.shape_contact_pair_count))
+
+        state = model.state()
+        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+        contacts = pipeline.contacts()
+        pipeline.collide(state, contacts)
+        pair_count = int(pipeline.broad_phase_pair_count.numpy()[0])
+        pipeline_pairs = pipeline.broad_phase_shape_pairs.numpy()[:pair_count]
+        order = np.lexsort((pipeline_pairs[:, 1], pipeline_pairs[:, 0]))
+        pipeline_pairs = pipeline_pairs[order]
+
+        reference_pairs = wp.zeros(pipeline.shape_pairs_max, dtype=wp.vec2i)
+        reference_count = wp.zeros(1, dtype=wp.int32)
+        newton.geometry.BroadPhaseExplicit().launch(
+            pipeline.narrow_phase.shape_aabb_lower,
+            pipeline.narrow_phase.shape_aabb_upper,
+            None,
+            pipeline.shape_pairs_filtered,
+            pipeline.shape_pairs_max,
+            reference_pairs,
+            reference_count,
+            device=model.device,
+            shape_body=model.shape_body,
+            body_flags=model.body_flags,
+            include_static_kinematic_pairs=pipeline.include_static_kinematic_pairs,
+        )
+        wp.synchronize()
+        reference_n = int(reference_count.numpy()[0])
+        reference = reference_pairs.numpy()[:reference_n]
+        reference = reference[np.lexsort((reference[:, 1], reference[:, 0]))]
+        np.testing.assert_array_equal(pipeline_pairs, reference)
+        self.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
+
+        nxn = newton.CollisionPipeline(model, broad_phase="nxn", rigid_contact_max=16)
+        self.assertEqual(nxn.shape_pairs_max, _compute_per_world_shape_pairs_max(model))
+
     def test_pipeline_buffer_size_scales_linearly(self):
         """End-to-end: CollisionPipeline buffers must not explode with many worlds."""
         num_worlds = 64
