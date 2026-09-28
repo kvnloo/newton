@@ -1,0 +1,1 @@
+Fix `SolverXPBD` revolute (and single-axis D6) limits that extend past ±π. The hinge angle is measured within π of the limit-range midpoint, or of the drive target when the range is at least 2π, instead of as a principal value, so crossing ±π is no longer a ~2π limit correction. `eval_ik` reports the same branch.
