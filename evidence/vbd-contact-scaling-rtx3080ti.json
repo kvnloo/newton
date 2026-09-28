@@ -1,0 +1,589 @@
+{
+  "issue": "https://github.com/newton-physics/newton/issues/4141",
+  "pr_3995": "https://github.com/newton-physics/newton/pull/3995",
+  "pr_3995_state": "merged",
+  "gpu": "NVIDIA GeForce RTX 3080 Ti 12288 MiB",
+  "warp": "1.17.0",
+  "cuda_toolkit": "12.9",
+  "driver": "13.3",
+  "metric": "env_steps_per_s = num_envs * timed_steps / wall_seconds of CUDA-graph replay after 15 warmup launches and 3 uncaptured steps. wp.synchronize() before and after the timed loop.",
+  "scaling_efficiency_definition": "(env_steps_per_s(N)/N) / (env_steps_per_s(128)/128). 1.0 means linear scaling from the 128-env point.",
+  "not_isaac_lab": "Isaac Lab is not installed. These are not Isaac-Lift-Soft-Franka or Isaac-Lift-Cloth-Franka numbers and must not be compared directly to the RTX 5090 table in #4141.",
+  "scene": {
+    "world": "1 kinematic support box + 6 kinematic rod boxes + either a 6x6 cloth (49 particles, tri_ke=1e3) or a 3x3x3 soft tet grid (64 particles). Worlds spaced on a 0.6 m grid.",
+    "solver": "SolverVBD iterations=10, dt=1/60, particle_enable_self_contact=False, rigid_compliant_alm=False, broad_phase=sap, soft contact gap/margin 0.01.",
+    "pre_3995_harness_difference": "Commit 95d9402 SolverVBD has no collision_pipeline argument. The timed graph is CollisionPipeline.collide() plus solver.step(contacts). PR head 584d2ba and current main time solver.step() with an owned pipeline (rigid slot AUTO -> PRE_INIT, one detection per step, rigid_soft_enable_dat=False). Same scene and iteration count, not an identical call stack."
+  },
+  "current_main": {
+    "commit": "3b7c3c848b9ff012ab28273d09dc00523dcd961b",
+    "includes_merged_3995": true,
+    "nondeterministic_gather_path": {
+      "cloth": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 111784.90042120962,
+          "ms_per_step": 1.145056259992998,
+          "timed_steps": 400,
+          "wall_s": 0.45802250399719924,
+          "peak_vram_mib": 2092,
+          "mean_gpu_util_pct": 40.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 6272,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 134361.16844973163,
+          "ms_per_step": 1.9053123975754716,
+          "timed_steps": 400,
+          "wall_s": 0.7621249590301886,
+          "peak_vram_mib": 2148,
+          "mean_gpu_util_pct": 56.8,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 12544,
+          "scaling_efficiency_vs_128": 0.6009808477864801
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 177887.43935696204,
+          "ms_per_step": 2.878224577580113,
+          "timed_steps": 400,
+          "wall_s": 1.1512898310320452,
+          "peak_vram_mib": 1852,
+          "mean_gpu_util_pct": 73.71428571428571,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 25088,
+          "scaling_efficiency_vs_128": 0.3978342304879184
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 202477.88250743225,
+          "ms_per_step": 5.0573424974572845,
+          "timed_steps": 400,
+          "wall_s": 2.022936998982914,
+          "peak_vram_mib": 2206,
+          "mean_gpu_util_pct": 85.77777777777777,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 50176,
+          "scaling_efficiency_vs_128": 0.2264146160891231
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 238465.8333662432,
+          "ms_per_step": 8.588232415058883,
+          "timed_steps": 400,
+          "wall_s": 3.435292966023553,
+          "peak_vram_mib": 2340,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 100352,
+          "scaling_efficiency_vs_128": 0.13332851332542184
+        }
+      ],
+      "volume": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 57564.81714619919,
+          "ms_per_step": 2.2235804150113836,
+          "timed_steps": 400,
+          "wall_s": 0.8894321660045534,
+          "peak_vram_mib": 2194,
+          "mean_gpu_util_pct": 93.66666666666667,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 3840,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 110005.26480377426,
+          "ms_per_step": 2.3271613450197037,
+          "timed_steps": 400,
+          "wall_s": 0.9308645380078815,
+          "peak_vram_mib": 1858,
+          "mean_gpu_util_pct": 74.83333333333333,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 7680,
+          "scaling_efficiency_vs_128": 0.955490438928959
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 100297.1322626407,
+          "ms_per_step": 5.104831897479016,
+          "timed_steps": 400,
+          "wall_s": 2.0419327589916065,
+          "peak_vram_mib": 1892,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 15360,
+          "scaling_efficiency_vs_128": 0.43558347457229346
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 158739.15836681865,
+          "ms_per_step": 6.450834252464119,
+          "timed_steps": 400,
+          "wall_s": 2.5803337009856477,
+          "peak_vram_mib": 1953,
+          "mean_gpu_util_pct": 98.93333333333334,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 30720,
+          "scaling_efficiency_vs_128": 0.3446965660545394
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 168939.34076634905,
+          "ms_per_step": 12.122694398532541,
+          "timed_steps": 291,
+          "wall_s": 3.5277040699729696,
+          "peak_vram_mib": 2071,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 61440,
+          "scaling_efficiency_vs_128": 0.18342295383446677
+        }
+      ]
+    },
+    "deterministic_RUN_TO_RUN": {
+      "note": "wp.DeterministicMode.RUN_TO_RUN keeps the legacy contact scatter and also changes other atomic reductions. It is not an isolated ablation of the #3995 gather kernel. On this scene it is slower at every env count, so it does not show a small-env crossover versus the default path.",
+      "cloth": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 4950.068440093211,
+          "ms_per_step": 25.858228335442917,
+          "timed_steps": 158,
+          "wall_s": 4.085600076999981,
+          "peak_vram_mib": 2148,
+          "mean_gpu_util_pct": 99.375,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 6272,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 9288.821897413873,
+          "ms_per_step": 27.560007375238154,
+          "timed_steps": 144,
+          "wall_s": 3.968641062034294,
+          "peak_vram_mib": 1884,
+          "mean_gpu_util_pct": 97.17391304347827,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 12544,
+          "scaling_efficiency_vs_128": 0.9382518655882424
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 15794.027536130818,
+          "ms_per_step": 32.41731716807102,
+          "timed_steps": 119,
+          "wall_s": 3.8576607430004515,
+          "peak_vram_mib": 1980,
+          "mean_gpu_util_pct": 97.4090909090909,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 25088,
+          "scaling_efficiency_vs_128": 0.7976671296202024
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 21656.285896858913,
+          "ms_per_step": 47.284192907174535,
+          "timed_steps": 86,
+          "wall_s": 4.0664405900170095,
+          "peak_vram_mib": 2148,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 50176,
+          "scaling_efficiency_vs_128": 0.5468683453306739
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 26730.977934102146,
+          "ms_per_step": 76.61522915655308,
+          "timed_steps": 51,
+          "wall_s": 3.9073766869842075,
+          "peak_vram_mib": 2826,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 100352,
+          "scaling_efficiency_vs_128": 0.33750768117661106
+        }
+      ],
+      "volume": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 4915.7271135714955,
+          "ms_per_step": 26.038874217938897,
+          "timed_steps": 156,
+          "wall_s": 4.0620643779984675,
+          "peak_vram_mib": 1858,
+          "mean_gpu_util_pct": 96.79166666666667,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 3840,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 5120.421695508269,
+          "ms_per_step": 49.9958822189524,
+          "timed_steps": 73,
+          "wall_s": 3.6496994019835256,
+          "peak_vram_mib": 1922,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 7936,
+          "scaling_efficiency_vs_128": 0.5208203768443174
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 15512.955644457634,
+          "ms_per_step": 33.00467117514927,
+          "timed_steps": 120,
+          "wall_s": 3.9605605410179123,
+          "peak_vram_mib": 1995,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 15360,
+          "scaling_efficiency_vs_128": 0.7889451187001906
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 20883.23533830832,
+          "ms_per_step": 49.03454773224572,
+          "timed_steps": 82,
+          "wall_s": 4.020832914044149,
+          "peak_vram_mib": 2200,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 31744,
+          "scaling_efficiency_vs_128": 0.5310311896853779
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 27202.941542312634,
+          "ms_per_step": 75.28597584987094,
+          "timed_steps": 53,
+          "wall_s": 3.99015672004316,
+          "peak_vram_mib": 2906,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 63488,
+          "scaling_efficiency_vs_128": 0.34586619784092937
+        }
+      ]
+    }
+  },
+  "pre_3995": {
+    "commit": "95d940298939a37387061921d72a965c33a86175",
+    "label": "main cited by #4141, before #3995 merged",
+    "nondeterministic": {
+      "cloth": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 69850.78457786705,
+          "ms_per_step": 1.832477627467597,
+          "timed_steps": 400,
+          "wall_s": 0.7329910509870388,
+          "peak_vram_mib": 1752,
+          "mean_gpu_util_pct": 87.6,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 104292.49611948174,
+          "ms_per_step": 2.4546348924923223,
+          "timed_steps": 400,
+          "wall_s": 0.9818539569969289,
+          "peak_vram_mib": 1784,
+          "mean_gpu_util_pct": 54.5,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.7465377572332088
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 124284.24027875988,
+          "ms_per_step": 4.119589087495115,
+          "timed_steps": 400,
+          "wall_s": 1.6478356349980459,
+          "peak_vram_mib": 1816,
+          "mean_gpu_util_pct": 90.8,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.44482048780788014
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 141441.00592741833,
+          "ms_per_step": 7.239767514984123,
+          "timed_steps": 400,
+          "wall_s": 2.8959070059936494,
+          "peak_vram_mib": 1848,
+          "mean_gpu_util_pct": 90.3529411764706,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.2531127724301815
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 108150.22222201015,
+          "ms_per_step": 18.93662313329211,
+          "timed_steps": 300,
+          "wall_s": 5.680986939987633,
+          "peak_vram_mib": 1978,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.09676897589232546
+        }
+      ],
+      "volume": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 74717.88856331221,
+          "ms_per_step": 1.7131105075532105,
+          "timed_steps": 400,
+          "wall_s": 0.6852442030212842,
+          "peak_vram_mib": 1818,
+          "mean_gpu_util_pct": 64.4,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 92486.59202884504,
+          "ms_per_step": 2.7679687875206582,
+          "timed_steps": 400,
+          "wall_s": 1.1071875150082633,
+          "peak_vram_mib": 1818,
+          "mean_gpu_util_pct": 64.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.6189052836421931
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 115909.12631830164,
+          "ms_per_step": 4.417253552528564,
+          "timed_steps": 400,
+          "wall_s": 1.7669014210114256,
+          "peak_vram_mib": 1818,
+          "mean_gpu_util_pct": 92.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.3878225433929588
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 131435.4880540672,
+          "ms_per_step": 7.790894340338039,
+          "timed_steps": 332,
+          "wall_s": 2.586576920992229,
+          "peak_vram_mib": 1882,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.21988624575274118
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 144036.06924116713,
+          "ms_per_step": 14.218660720120921,
+          "timed_steps": 286,
+          "wall_s": 4.066536965954583,
+          "peak_vram_mib": 2038,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": null,
+          "scaling_efficiency_vs_128": 0.12048325375180917
+        }
+      ]
+    }
+  },
+  "pr_3995_head": {
+    "commit": "584d2bad15525a325109f8efdc87132f60349d03",
+    "fetched_read_only": true,
+    "not_pushed": true,
+    "nondeterministic": {
+      "cloth": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 97252.2048642259,
+          "ms_per_step": 1.3161655324802268,
+          "timed_steps": 400,
+          "wall_s": 0.5264662129920907,
+          "peak_vram_mib": 1736,
+          "mean_gpu_util_pct": 65.5,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 6272,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 142086.87874707195,
+          "ms_per_step": 1.801714572502533,
+          "timed_steps": 400,
+          "wall_s": 0.7206858290010132,
+          "peak_vram_mib": 1768,
+          "mean_gpu_util_pct": 64.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 12544,
+          "scaling_efficiency_vs_128": 0.7305072360335679
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 175211.43070862914,
+          "ms_per_step": 2.9221837749355473,
+          "timed_steps": 400,
+          "wall_s": 1.168873509974219,
+          "peak_vram_mib": 1800,
+          "mean_gpu_util_pct": 61.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 25088,
+          "scaling_efficiency_vs_128": 0.4504047773344634
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 209657.98259635436,
+          "ms_per_step": 4.884145060059382,
+          "timed_steps": 400,
+          "wall_s": 1.9536580240237527,
+          "peak_vram_mib": 1832,
+          "mean_gpu_util_pct": 89.91666666666667,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 50176,
+          "scaling_efficiency_vs_128": 0.26947715849869225
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 225292.7367749922,
+          "ms_per_step": 9.09039514241158,
+          "timed_steps": 400,
+          "wall_s": 3.636158056964632,
+          "peak_vram_mib": 1966,
+          "mean_gpu_util_pct": 97.85714285714286,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 100352,
+          "scaling_efficiency_vs_128": 0.14478639397528575
+        }
+      ],
+      "volume": [
+        {
+          "num_envs": 128,
+          "env_steps_per_s": 63645.79191668529,
+          "ms_per_step": 2.011130604951177,
+          "timed_steps": 400,
+          "wall_s": 0.8044522419804707,
+          "peak_vram_mib": 1806,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 3840,
+          "scaling_efficiency_vs_128": 1.0
+        },
+        {
+          "num_envs": 256,
+          "env_steps_per_s": 100696.28353036752,
+          "ms_per_step": 2.542298394982936,
+          "timed_steps": 400,
+          "wall_s": 1.0169193579931743,
+          "peak_vram_mib": 1806,
+          "mean_gpu_util_pct": 70.33333333333333,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 7680,
+          "scaling_efficiency_vs_128": 0.7910678812998565
+        },
+        {
+          "num_envs": 512,
+          "env_steps_per_s": 69440.6531478657,
+          "ms_per_step": 7.373202537564794,
+          "timed_steps": 400,
+          "wall_s": 2.9492810150259174,
+          "peak_vram_mib": 1831,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 15360,
+          "scaling_efficiency_vs_128": 0.2727621538544375
+        },
+        {
+          "num_envs": 1024,
+          "env_steps_per_s": 80781.76454557397,
+          "ms_per_step": 12.676128155411838,
+          "timed_steps": 296,
+          "wall_s": 3.752133934001904,
+          "peak_vram_mib": 1918,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 30720,
+          "scaling_efficiency_vs_128": 0.15865495996051143
+        },
+        {
+          "num_envs": 2048,
+          "env_steps_per_s": 106090.93709684568,
+          "ms_per_step": 19.30419370441108,
+          "timed_steps": 169,
+          "wall_s": 3.2624087360454723,
+          "peak_vram_mib": 2022,
+          "mean_gpu_util_pct": 100.0,
+          "max_gpu_util_pct": 100,
+          "soft_contact_count": 61440,
+          "scaling_efficiency_vs_128": 0.10418102075362133
+        }
+      ]
+    }
+  },
+  "pr_over_pre": {
+    "cloth": [
+      {
+        "num_envs": 128,
+        "pr_over_pre": 1.3922850752780418
+      },
+      {
+        "num_envs": 256,
+        "pr_over_pre": 1.3623883216323773
+      },
+      {
+        "num_envs": 512,
+        "pr_over_pre": 1.4097638631868652
+      },
+      {
+        "num_envs": 1024,
+        "pr_over_pre": 1.482299855134954
+      },
+      {
+        "num_envs": 2048,
+        "pr_over_pre": 2.0831463139531285
+      }
+    ],
+    "volume": [
+      {
+        "num_envs": 128,
+        "pr_over_pre": 0.8518146476095215
+      },
+      {
+        "num_envs": 256,
+        "pr_over_pre": 1.0887662884038587
+      },
+      {
+        "num_envs": 512,
+        "pr_over_pre": 0.5990956480611593
+      },
+      {
+        "num_envs": 1024,
+        "pr_over_pre": 0.61461151582093
+      },
+      {
+        "num_envs": 2048,
+        "pr_over_pre": 0.7365581250291694
+      }
+    ]
+  },
+  "crossover": {
+    "cloth_pr_vs_pre": "No small-env crossover. PR head is faster at 128, 256, 512, 1024, and 2048. Pre cloth throughput falls from 1024 to 2048 (141441 -> 108150 env steps/s); PR head keeps rising (209658 -> 225293).",
+    "volume_pr_vs_pre": "Crossover is visible and not only at the smallest count. PR head is slower at 128 (63646 vs 74718, 0.85x), faster at 256 (100696 vs 92487, 1.09x), then slower at 512, 1024, and 2048 (0.60x, 0.61x, 0.74x). This reduced tet scene does not reproduce the RTX 5090 Isaac Lab soft-body speedup reported on #3995.",
+    "current_main_volume_vs_pre": "Current main (post-merge, plus later commits) is slower than pre at 128 (57565 vs 74718) and at 512 (100297 vs 115909), and faster at 256, 1024, and 2048.",
+    "deterministic_vs_default_on_current": "No crossover. RUN_TO_RUN is slower at every measured count on both scenes.",
+    "isaac_128_regression_not_reproduced_for_cloth": "The #4141 comment reported soft 4442->3716 env steps/s at 128 envs on an RTX 5090 Isaac Lab task. This proxy cloth scene does not show that regression."
+  },
+  "kernel_breakdown": "Not collected. No Nsight Systems profile was run. GPU utilization is nvidia-smi samples about every 150 ms during the timed loop only; short loops have few samples and the mean is coarse."
+}
