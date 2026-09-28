@@ -1,0 +1,401 @@
+{
+  "device_name": "NVIDIA GeForce RTX 3080 Ti",
+  "device_arch": 86,
+  "sm_count": 80,
+  "total_memory_bytes": 12479037440,
+  "mempool_enabled": true,
+  "warmup": 3,
+  "repeats": 7,
+  "scenes": [
+    {
+      "name": "sparse_default_buffers",
+      "dim_cells": 40,
+      "query_radius_m": 1e-06,
+      "position_xz_scale": null,
+      "vertex_buffer_pre_alloc": 16,
+      "edge_buffer_pre_alloc": 32,
+      "particle_count": 1681,
+      "tri_count": 3200,
+      "edge_count": 4880,
+      "contacts": {
+        "vertex_capacity_slots": 26896,
+        "vertex_detected": 0,
+        "vertex_stored": 0,
+        "vertex_overflow_elements": 0,
+        "edge_capacity_slots": 156160,
+        "edge_detected": 0,
+        "edge_stored": 0,
+        "edge_overflow_elements": 0
+      },
+      "resize_flags": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "fixed_index_buffer_bytes": 1464448,
+      "proportional_stored_index_bytes": 0,
+      "proportional_detected_index_bytes": 0,
+      "allocation": {
+        "cuda_used_delta_bytes_samples": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cuda_used_delta_bytes_median": 0,
+        "declared_nbytes": {
+          "vertex_colliding_triangles": 215168,
+          "vertex_colliding_triangles_offsets": 6728,
+          "vertex_colliding_triangles_buffer_sizes": 6724,
+          "vertex_colliding_triangles_count": 6724,
+          "vertex_colliding_triangles_min_dist": 6724,
+          "triangle_colliding_vertices": 0,
+          "triangle_colliding_vertices_offsets": 0,
+          "triangle_colliding_vertices_buffer_sizes": 0,
+          "triangle_colliding_vertices_count": 0,
+          "triangle_colliding_vertices_min_dist": 12800,
+          "edge_colliding_edges": 1249280,
+          "edge_colliding_edges_offsets": 19524,
+          "edge_colliding_edges_buffer_sizes": 19520,
+          "edge_colliding_edges_count": 19520,
+          "edge_colliding_edges_min_dist": 19520,
+          "total": 1582232
+        }
+      },
+      "detector_cuda_used_delta_bytes": 0,
+      "cuda_used_bytes_after_detection_samples": [
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632
+      ],
+      "cuda_used_bytes_after_detection_median": 1816133632,
+      "detection_ms_samples": [
+        0.17940200632438064,
+        0.5416880012489855,
+        0.19413401605561376,
+        0.4581250250339508,
+        0.24146604118868709,
+        0.4453799920156598,
+        0.4871540004387498
+      ],
+      "detection_ms_median": 0.4453799920156598
+    },
+    {
+      "name": "dense_default_buffers",
+      "dim_cells": 40,
+      "query_radius_m": 0.05,
+      "position_xz_scale": 0.02,
+      "vertex_buffer_pre_alloc": 16,
+      "edge_buffer_pre_alloc": 32,
+      "particle_count": 1681,
+      "tri_count": 3200,
+      "edge_count": 4880,
+      "contacts": {
+        "vertex_capacity_slots": 26896,
+        "vertex_detected": 757920,
+        "vertex_stored": 26896,
+        "vertex_overflow_elements": 1681,
+        "edge_capacity_slots": 156160,
+        "edge_detected": 3540670,
+        "edge_stored": 156160,
+        "edge_overflow_elements": 4880
+      },
+      "resize_flags": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "fixed_index_buffer_bytes": 1464448,
+      "proportional_stored_index_bytes": 1464448,
+      "proportional_detected_index_bytes": 34388720,
+      "allocation": {
+        "cuda_used_delta_bytes_samples": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cuda_used_delta_bytes_median": 0,
+        "declared_nbytes": {
+          "vertex_colliding_triangles": 215168,
+          "vertex_colliding_triangles_offsets": 6728,
+          "vertex_colliding_triangles_buffer_sizes": 6724,
+          "vertex_colliding_triangles_count": 6724,
+          "vertex_colliding_triangles_min_dist": 6724,
+          "triangle_colliding_vertices": 0,
+          "triangle_colliding_vertices_offsets": 0,
+          "triangle_colliding_vertices_buffer_sizes": 0,
+          "triangle_colliding_vertices_count": 0,
+          "triangle_colliding_vertices_min_dist": 12800,
+          "edge_colliding_edges": 1249280,
+          "edge_colliding_edges_offsets": 19524,
+          "edge_colliding_edges_buffer_sizes": 19520,
+          "edge_colliding_edges_count": 19520,
+          "edge_colliding_edges_min_dist": 19520,
+          "total": 1582232
+        }
+      },
+      "detector_cuda_used_delta_bytes": 0,
+      "cuda_used_bytes_after_detection_samples": [
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632,
+        1816133632
+      ],
+      "cuda_used_bytes_after_detection_median": 1816133632,
+      "detection_ms_samples": [
+        3.410434990655631,
+        3.1096329912543297,
+        3.244554973207414,
+        3.276969015132636,
+        3.3196030417457223,
+        3.064463031478226,
+        3.219842037651688
+      ],
+      "detection_ms_median": 3.244554973207414
+    },
+    {
+      "name": "sparse_large_mesh_high_capacity",
+      "dim_cells": 160,
+      "query_radius_m": 1e-06,
+      "position_xz_scale": null,
+      "vertex_buffer_pre_alloc": 256,
+      "edge_buffer_pre_alloc": 256,
+      "particle_count": 25921,
+      "tri_count": 51200,
+      "edge_count": 77120,
+      "contacts": {
+        "vertex_capacity_slots": 6635776,
+        "vertex_detected": 0,
+        "vertex_stored": 0,
+        "vertex_overflow_elements": 0,
+        "edge_capacity_slots": 19742720,
+        "edge_detected": 0,
+        "edge_stored": 0,
+        "edge_overflow_elements": 0
+      },
+      "resize_flags": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "fixed_index_buffer_bytes": 211027968,
+      "proportional_stored_index_bytes": 0,
+      "proportional_detected_index_bytes": 0,
+      "allocation": {
+        "cuda_used_delta_bytes_samples": [
+          201326592,
+          234881024,
+          201326592,
+          201326592,
+          234881024,
+          201326592,
+          201326592
+        ],
+        "cuda_used_delta_bytes_median": 201326592,
+        "declared_nbytes": {
+          "vertex_colliding_triangles": 53086208,
+          "vertex_colliding_triangles_offsets": 103688,
+          "vertex_colliding_triangles_buffer_sizes": 103684,
+          "vertex_colliding_triangles_count": 103684,
+          "vertex_colliding_triangles_min_dist": 103684,
+          "triangle_colliding_vertices": 0,
+          "triangle_colliding_vertices_offsets": 0,
+          "triangle_colliding_vertices_buffer_sizes": 0,
+          "triangle_colliding_vertices_count": 0,
+          "triangle_colliding_vertices_min_dist": 204800,
+          "edge_colliding_edges": 157941760,
+          "edge_colliding_edges_offsets": 308484,
+          "edge_colliding_edges_buffer_sizes": 308480,
+          "edge_colliding_edges_count": 308480,
+          "edge_colliding_edges_min_dist": 308480,
+          "total": 212881432
+        }
+      },
+      "detector_cuda_used_delta_bytes": 0,
+      "cuda_used_bytes_after_detection_samples": [
+        2051014656,
+        2051014656,
+        2051014656,
+        2051014656,
+        2051014656,
+        2051014656,
+        2051014656
+      ],
+      "cuda_used_bytes_after_detection_median": 2051014656,
+      "detection_ms_samples": [
+        1.2610370176844299,
+        1.2170890113338828,
+        1.1853010510094464,
+        1.257903000805527,
+        1.1880429810844362,
+        1.1800220236182213,
+        1.1415649787522852
+      ],
+      "detection_ms_median": 1.1880429810844362
+    },
+    {
+      "name": "dense_small_mesh_high_capacity",
+      "dim_cells": 24,
+      "query_radius_m": 0.05,
+      "position_xz_scale": 0.02,
+      "vertex_buffer_pre_alloc": 256,
+      "edge_buffer_pre_alloc": 256,
+      "particle_count": 625,
+      "tri_count": 1152,
+      "edge_count": 1776,
+      "contacts": {
+        "vertex_capacity_slots": 160000,
+        "vertex_detected": 162144,
+        "vertex_stored": 149680,
+        "vertex_overflow_elements": 475,
+        "edge_capacity_slots": 454656,
+        "edge_detected": 748910,
+        "edge_stored": 452550,
+        "edge_overflow_elements": 1728
+      },
+      "resize_flags": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "fixed_index_buffer_bytes": 4917248,
+      "proportional_stored_index_bytes": 4817840,
+      "proportional_detected_index_bytes": 7288432,
+      "allocation": {
+        "cuda_used_delta_bytes_samples": [
+          0,
+          0,
+          33554432,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cuda_used_delta_bytes_median": 0,
+        "declared_nbytes": {
+          "vertex_colliding_triangles": 1280000,
+          "vertex_colliding_triangles_offsets": 2504,
+          "vertex_colliding_triangles_buffer_sizes": 2500,
+          "vertex_colliding_triangles_count": 2500,
+          "vertex_colliding_triangles_min_dist": 2500,
+          "triangle_colliding_vertices": 0,
+          "triangle_colliding_vertices_offsets": 0,
+          "triangle_colliding_vertices_buffer_sizes": 0,
+          "triangle_colliding_vertices_count": 0,
+          "triangle_colliding_vertices_min_dist": 4608,
+          "edge_colliding_edges": 3637248,
+          "edge_colliding_edges_offsets": 7108,
+          "edge_colliding_edges_buffer_sizes": 7104,
+          "edge_colliding_edges_count": 7104,
+          "edge_colliding_edges_min_dist": 7104,
+          "total": 4960280
+        }
+      },
+      "detector_cuda_used_delta_bytes": 0,
+      "cuda_used_bytes_after_detection_samples": [
+        1849688064,
+        1849688064,
+        1849688064,
+        1849688064,
+        1849688064,
+        1849688064,
+        1849688064
+      ],
+      "cuda_used_bytes_after_detection_median": 1849688064,
+      "detection_ms_samples": [
+        1.9095499883405864,
+        1.9184199627488852,
+        1.686192990746349,
+        1.7730199615471065,
+        1.9074680167250335,
+        1.9990329747088253,
+        2.2450669785030186
+      ],
+      "detection_ms_median": 1.9095499883405864
+    }
+  ],
+  "mempool_disabled_allocation": [
+    {
+      "name": "sparse_default_buffers",
+      "cuda_used_delta_bytes_samples": [
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152
+      ],
+      "cuda_used_delta_bytes_median": 2097152,
+      "declared_nbytes_total": 1582232,
+      "vertex_index_bytes": 215168,
+      "edge_index_bytes": 1249280
+    },
+    {
+      "name": "dense_default_buffers",
+      "cuda_used_delta_bytes_samples": [
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152,
+        2097152
+      ],
+      "cuda_used_delta_bytes_median": 2097152,
+      "declared_nbytes_total": 1582232,
+      "vertex_index_bytes": 215168,
+      "edge_index_bytes": 1249280
+    },
+    {
+      "name": "sparse_large_mesh_high_capacity",
+      "cuda_used_delta_bytes_samples": [
+        216006656,
+        216006656,
+        216006656,
+        216006656,
+        216006656,
+        216006656,
+        216006656
+      ],
+      "cuda_used_delta_bytes_median": 216006656,
+      "declared_nbytes_total": 212881432,
+      "vertex_index_bytes": 53086208,
+      "edge_index_bytes": 157941760
+    },
+    {
+      "name": "dense_small_mesh_high_capacity",
+      "cuda_used_delta_bytes_samples": [
+        6291456,
+        6291456,
+        6291456,
+        6291456,
+        6291456,
+        6291456,
+        6291456
+      ],
+      "cuda_used_delta_bytes_median": 6291456,
+      "declared_nbytes_total": 4960280,
+      "vertex_index_bytes": 1280000,
+      "edge_index_bytes": 3637248
+    }
+  ]
+}
