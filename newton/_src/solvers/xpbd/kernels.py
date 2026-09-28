@@ -1725,10 +1725,12 @@ def solve_body_joints(
                 dt,
             )
 
+            # One positional impulse: scale its force and its moment by the same factor.
+            # Using angular_relaxation on the moment under-transmits the pivot reaction.
             lin_delta_p += linear_p * (d_lambda * linear_relaxation)
-            ang_delta_p += angular_p * (d_lambda * angular_relaxation)
+            ang_delta_p += angular_p * (d_lambda * linear_relaxation)
             lin_delta_c += linear_c * (d_lambda * linear_relaxation)
-            ang_delta_c += angular_c * (d_lambda * angular_relaxation)
+            ang_delta_c += angular_c * (d_lambda * linear_relaxation)
 
     else:
         # compute joint target, stiffness, damping
@@ -1881,10 +1883,11 @@ def solve_body_joints(
                     dt,
                 )
 
+                # Positional row: the moment about each COM is part of the same impulse.
                 lin_delta_p += linear_p * (d_lambda * linear_relaxation)
-                ang_delta_p += angular_p * (d_lambda * angular_relaxation)
+                ang_delta_p += angular_p * (d_lambda * linear_relaxation)
                 lin_delta_c += linear_c * (d_lambda * linear_relaxation)
-                ang_delta_c += angular_c * (d_lambda * angular_relaxation)
+                ang_delta_c += angular_c * (d_lambda * linear_relaxation)
 
     if type == JointType.FIXED or type == JointType.PRISMATIC or type == JointType.REVOLUTE or type == JointType.D6:
         # handle angular constraints

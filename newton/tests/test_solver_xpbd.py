@@ -2591,6 +2591,75 @@ def test_xpbd_mimic_warns_for_unsupported_joint_types(test, device):
 devices = get_test_devices()
 
 
+def _hinge_response_ratio(device, solver_kw, gravity, torque, dt=2.5e-3, n=20):
+    """Angular acceleration over the analytic hinge value.
+
+    N semi-implicit steps from rest give ``q_N = a dt^2 N (N + 1) / 2``.
+    The ratio is 1 when the pivot reaction and the applied load share one inertia.
+    """
+    builder = newton.ModelBuilder(gravity=(0.0, 0.0, gravity))
+    link = builder.add_link(xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()), mass=1.0)
+    builder.add_shape_box(link, xform=wp.transform((0.25, 0.0, 0.0), wp.quat_identity()), hx=0.25, hy=0.05, hz=0.05)
+    joint = builder.add_joint_revolute(
+        -1,
+        link,
+        parent_xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()),
+        axis=(0.0, 1.0, 0.0),
+    )
+    builder.add_articulation([joint])
+    model = builder.finalize(device=device)
+    solver = newton.solvers.SolverXPBD(model, angular_damping=0.0, **solver_kw)
+    state_0 = model.state()
+    state_1 = model.state()
+    control = model.control()
+    control.joint_f.assign(np.array([torque], dtype=np.float32))
+    for _ in range(n):
+        state_0.clear_forces()
+        solver.step(state_0, state_1, control, None, dt)
+        state_0, state_1 = state_1, state_0
+    joint_q = wp.zeros(1, dtype=float, device=device)
+    joint_qd = wp.zeros(1, dtype=float, device=device)
+    newton.eval_ik(model, state_0, joint_q, joint_qd)
+    acceleration = 2.0 * float(joint_q.numpy()[0]) / (dt * dt * n * (n + 1))
+    mass = float(model.body_mass.numpy()[0])
+    lever = float(model.body_com.numpy()[0][0])
+    inertia = float(model.body_inertia.numpy()[0][1, 1]) + mass * lever * lever
+    load = torque if torque else mass * 9.81 * lever
+    return acceleration * inertia / load
+
+
+def test_xpbd_joint_relaxation_matches_analytic_hinge(test, device):
+    """Unequal default relaxation must not split one positional joint impulse.
+
+    A revolute pendulum's response to ``Control.joint_f`` and to gravity is the
+    analytic hinge acceleration, including at the default factors 0.7 / 0.4.
+    Equal factors stay exact. The ratio does not depend on the iteration count.
+    """
+    cases = (
+        ({}, "defaults"),
+        ({"joint_linear_relaxation": 0.7, "joint_angular_relaxation": 0.4}, "0.7/0.4"),
+        ({"joint_linear_relaxation": 0.4, "joint_angular_relaxation": 0.4}, "0.4/0.4"),
+        ({"joint_linear_relaxation": 1.0, "joint_angular_relaxation": 1.0}, "1/1"),
+    )
+    for iterations in (2, 8):
+        for relaxation, label in cases:
+            kwargs = {"iterations": iterations, **relaxation}
+            torque_ratio = _hinge_response_ratio(device, kwargs, 0.0, 1.0)
+            gravity_ratio = _hinge_response_ratio(device, kwargs, -9.81, 0.0)
+            test.assertAlmostEqual(
+                torque_ratio,
+                1.0,
+                delta=0.03,
+                msg=f"{iterations} it {label} joint torque ratio {torque_ratio}",
+            )
+            test.assertAlmostEqual(
+                gravity_ratio,
+                1.0,
+                delta=0.03,
+                msg=f"{iterations} it {label} gravity ratio {gravity_ratio}",
+            )
+
+
 class TestSolverXPBD(unittest.TestCase):
     def test_restitution_is_disabled_by_default(self):
         """Keep restitution disabled by default without a deprecation warning."""
@@ -2888,6 +2957,14 @@ add_function_test(
     TestSolverXPBD,
     "test_xpbd_parent_f_centripetal_zero_g",
     test_xpbd_parent_f_centripetal_zero_g,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_joint_relaxation_matches_analytic_hinge",
+    test_xpbd_joint_relaxation_matches_analytic_hinge,
     devices=devices,
     check_output=False,
 )

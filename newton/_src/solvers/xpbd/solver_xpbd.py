@@ -144,9 +144,10 @@ class SolverXPBD(SolverBase, CouplingInterface):
                 [dimensionless]. Defaults to 0.9.
             soft_contact_relaxation: Relaxation factor applied to particle-particle and particle-shape contact
                 corrections [dimensionless]. Defaults to 0.9.
-            joint_linear_relaxation: Relaxation factor applied to linear joint constraint corrections
+            joint_linear_relaxation: Relaxation factor applied to positional joint corrections,
+                including both the linear impulse and its moment about each body COM
                 [dimensionless]. Defaults to 0.7.
-            joint_angular_relaxation: Relaxation factor applied to angular joint constraint corrections
+            joint_angular_relaxation: Relaxation factor applied to rotational joint constraint corrections
                 [dimensionless]. Defaults to 0.4.
             joint_linear_compliance: Compliance shared by linear joint constraints [m/N]. Defaults to 0.0.
             joint_angular_compliance: Compliance shared by angular joint constraints [rad/(N·m)]. Defaults to 0.0.
