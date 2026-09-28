@@ -2588,6 +2588,75 @@ def test_xpbd_mimic_warns_for_unsupported_joint_types(test, device):
     test.assertIn(f"unsupported follower joint indices: {followers[:10]}; 2 additional indices omitted.", message)
 
 
+def test_xpbd_revolute_drive_stiffness_tracks_target_ke(test, device):
+    """Static sag of a position-driven revolute tracks target_ke at every iteration count.
+
+    Regression for newton-physics/newton#4315. Previously the drive compliance was
+    reapplied with a fresh lambda on every iteration, so effective stiffness grew
+    almost linearly from about 71 to about 1240 N m/rad for target_ke 200.
+    """
+
+    def measure(iters, ke=200.0, kd=5.0, effort=1.0e6, target=0.5, dt=2.5e-3, duration=3.0):
+        builder = newton.ModelBuilder()
+        link = builder.add_link(xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()), mass=1.0)
+        builder.add_shape_box(link, xform=wp.transform((0.25, 0.0, 0.0), wp.quat_identity()), hx=0.25, hy=0.05, hz=0.05)
+        joint = builder.add_joint_revolute(
+            -1,
+            link,
+            parent_xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()),
+            axis=(0.0, 1.0, 0.0),
+            target_ke=ke,
+            target_kd=kd,
+            target_pos=target,
+            effort_limit=effort,
+        )
+        builder.add_articulation([joint])
+        model = builder.finalize(device=device)
+        solver = newton.solvers.SolverXPBD(
+            model,
+            iterations=iters,
+            joint_linear_relaxation=0.4,
+            joint_angular_relaxation=0.4,
+        )
+        state_0 = model.state()
+        state_1 = model.state()
+        control = model.control()
+        steps = int(duration / dt)
+        for _ in range(steps):
+            state_0.clear_forces()
+            solver.step(state_0, state_1, control, None, dt)
+            state_0, state_1 = state_1, state_0
+        joint_q = wp.zeros(1, dtype=float, device=device)
+        joint_qd = wp.zeros(1, dtype=float, device=device)
+        newton.eval_ik(model, state_0, joint_q, joint_qd)
+        q = float(joint_q.numpy()[0])
+        qd = float(joint_qd.numpy()[0])
+        mass = float(model.body_mass.numpy()[0])
+        com_x = float(model.body_com.numpy()[0][0])
+        gravity = float(np.linalg.norm(model.gravity.numpy()[0]))
+        tau_g = mass * gravity * com_x * np.cos(q)
+        sag = q - target
+        return sag, tau_g / sag, qd
+
+    stiffness = []
+    for iters in (1, 2, 4, 8, 16):
+        sag, keff, qd = measure(iters)
+        stiffness.append(keff)
+        test.assertLess(abs(qd), 1.0e-3, msg=f"{iters} it still moving, qd={qd}")
+        test.assertAlmostEqual(keff, 200.0, delta=4.0, msg=f"{iters} it keff={keff:.2f} sag={sag:.5f}")
+    test.assertLess(max(stiffness) - min(stiffness), 2.0, msg=f"iteration spread {stiffness}")
+
+    for ke in (50.0, 800.0):
+        _sag, keff, qd = measure(4, ke=ke)
+        test.assertLess(abs(qd), 2.0e-3)
+        test.assertAlmostEqual(keff / ke, 1.0, delta=0.03, msg=f"target_ke {ke} measured {keff}")
+
+    # Holding torque is about 10 N m. A 1 N m limit must not sit at the stiff sag.
+    for iters in (1, 16):
+        sag, _keff, _qd = measure(iters, effort=1.0, duration=1.5)
+        test.assertGreater(abs(sag), 0.2, msg=f"{iters} it effort limit did not yield, sag={sag}")
+
+
 devices = get_test_devices()
 
 
@@ -2912,6 +2981,14 @@ add_function_test(
     TestSolverXPBD,
     "test_xpbd_aligned_box_stack_remains_stable",
     test_xpbd_aligned_box_stack_remains_stable,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_revolute_drive_stiffness_tracks_target_ke",
+    test_xpbd_revolute_drive_stiffness_tracks_target_ke,
     devices=devices,
     check_output=False,
 )
