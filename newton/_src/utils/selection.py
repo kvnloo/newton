@@ -1167,8 +1167,37 @@ class ArticulationView:
     # ========================================================================================
     # Generic attribute API
 
-    @functools.lru_cache(maxsize=None)  # noqa
     def _get_attribute_array(self, name: str, source: Model | State | Control, _slice: Slice | int | None = None):
+        """Return a view of ``source.name``, rebuilt when that array is replaced.
+
+        The view used to be cached on the source object identity, so assigning a
+        new array to the same state attribute kept aliasing the old allocation.
+        """
+        attrib = self._resolve_attribute(name, source)
+        ptr = 0 if attrib.ptr is None else int(attrib.ptr)
+        cache: dict[tuple, wp.array] = self.__dict__.setdefault("_attribute_view_cache", {})
+        key = (name, id(source), repr(_slice), ptr)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        prefix = key[:3]
+        for old in [item for item in cache if item[:3] == prefix]:
+            del cache[old]
+        view = self._build_attribute_array(name, source, _slice)
+        cache[key] = view
+        return view
+
+    def _resolve_attribute(self, name: str, source: Model | State | Control):
+        if "." in name:
+            attrib = source
+            for part in name.split("."):
+                attrib = getattr(attrib, part)
+        else:
+            attrib = getattr(source, name)
+        assert isinstance(attrib, wp.array)
+        return attrib
+
+    def _build_attribute_array(self, name: str, source: Model | State | Control, _slice: Slice | int | None = None):
         # get the attribute (handle namespaced attributes like "mujoco.tendon_stiffness")
         # Note: the user-facing API uses dots (e.g., "mujoco.tendon_stiffness")
         # but internally attributes are stored with colons (e.g., "mujoco:tendon_stiffness")
