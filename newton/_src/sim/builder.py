@@ -3314,6 +3314,15 @@ class ModelBuilder:
             transform_mul_cfunc(a, b, ctypes.byref(out))
             return out
 
+        def rotate_vectors(rotation: wp.quat, vectors: np.ndarray) -> None:
+            # In-place SO(3) on (N, 3). Translation is not applied: a pure offset
+            # must leave linear and angular velocity unchanged.
+            q = np.asarray(rotation, dtype=np.float32)
+            xyz = q[:3]
+            w = float(q[3])
+            t = 2.0 * np.cross(xyz, vectors)
+            vectors += np.cross(xyz, t) + w * t
+
         counts = self._builder_merge_counts(builder)
         self._validate_builder_merge(builder, set(counts))
         attribute_specs = self._builder_merge_attribute_specs()
@@ -3430,10 +3439,17 @@ class ModelBuilder:
 
         attribute_specs.pop("joint_X_p")
         attribute_specs.pop("joint_q")
+        attribute_specs.pop("joint_qd")
         joint_X_p_start = array_starts.get("joint_X_p", int(bases["joint"]))
         if "joint_X_p" not in array_starts:
             self.joint_X_p.extend(source_list("joint_X_p") * world_count)
         joint_q = np.tile(np.asarray(builder.joint_q, dtype=np.float32), world_count)
+        # joint_qd is parent-frame. Free-root twists use the same rotation as joint_q
+        # (xform conjugated by joint_X_p). Other joint velocities are unchanged.
+        # Preserve source precision for joint velocities that are not rotated.
+        joint_qd_source = np.asarray(builder.joint_qd)
+        joint_qd_dtype = np.result_type(joint_qd_source.dtype, np.float32)
+        joint_qd = np.tile(joint_qd_source.astype(joint_qd_dtype, copy=False), world_count)
         if counts["joint"]:
             joint_types = np.asarray(builder.joint_type, dtype=np.int64)
             joint_parents = np.asarray(builder.joint_parent, dtype=np.int64)
@@ -3453,23 +3469,33 @@ class ModelBuilder:
                 free_root_frames = []
                 for joint in free_roots.tolist():
                     source_q = builder.joint_q_start[joint]
+                    source_qd = builder.joint_qd_start[joint]
                     xform_prev = wp.transform(*builder.joint_q[source_q : source_q + 7])
                     X_pj = wp.transform(*builder.joint_X_p[joint])
-                    free_root_frames.append((source_q, X_pj, wp.transform_inverse(X_pj), xform_prev))
+                    free_root_frames.append((source_q, source_qd, X_pj, wp.transform_inverse(X_pj), xform_prev))
                 for world_index, xform in enumerate(xforms):
                     if xform is None:
                         continue
                     coord_base = world_index * counts["joint_coord"]
-                    for source_q, X_pj, X_pj_inv, xform_prev in free_root_frames:
+                    dof_base = world_index * len(joint_qd_source)
+                    rotate_qd = not np.array_equal(np.asarray(xform.q), _IDENTITY_ROTATION)
+                    for source_q, source_qd, X_pj, X_pj_inv, xform_prev in free_root_frames:
                         xform_local = transform_mul(transform_mul(X_pj_inv, xform), X_pj)
                         transformed = transform_mul(xform_local, xform_prev)
                         target_q = coord_base + source_q
                         joint_q[target_q : target_q + 7] = np.asarray(transformed, dtype=np.float32)
+                        if rotate_qd:
+                            twist = joint_qd[dof_base + source_qd : dof_base + source_qd + 6].reshape(2, 3)
+                            rotate_vectors(wp.transform_get_rotation(xform_local), twist)
 
         if "joint_q" in array_starts:
             self.joint_q[array_starts["joint_q"] :] = joint_q
         else:
             self.joint_q.extend(joint_q.tolist())
+        if "joint_qd" in array_starts:
+            self.joint_qd[array_starts["joint_qd"] :] = joint_qd
+        elif len(joint_qd):
+            self.joint_qd.extend(joint_qd.tolist())
 
         for world_index, joint_start in enumerate(joint_starts.tolist()):
             body_start = int(body_starts[world_index])
@@ -3509,6 +3535,25 @@ class ModelBuilder:
                             transform_mul(xform, wp.transform(*source_body_q)) for source_body_q in builder.body_q
                         )
                     body_q_target += counts["body"]
+
+        # body_qd is a world-frame twist (linear, angular). Leave no-rotation
+        # copies on the generic path to preserve their values and representation.
+        if not translations_only and counts["body"]:
+            attribute_specs.pop("body_qd")
+            body_qd_source = np.asarray(builder.body_qd).reshape((-1, 6))
+            body_qd_dtype = np.result_type(body_qd_source.dtype, np.float32)
+            body_qd = np.tile(body_qd_source.astype(body_qd_dtype, copy=False), (world_count, 1))
+            for world_index, xform in enumerate(xforms):
+                if xform is None or np.array_equal(np.asarray(xform.q), _IDENTITY_ROTATION):
+                    continue
+                sl = slice(world_index * counts["body"], (world_index + 1) * counts["body"])
+                rotate_vectors(xform.q, body_qd[sl, :3])
+                rotate_vectors(xform.q, body_qd[sl, 3:])
+            if "body_qd" in array_starts:
+                self.body_qd[array_starts["body_qd"] :] = body_qd
+            else:
+                descriptor = _describe_array_backed_list(source_list("body_qd")[0])
+                self.body_qd.extend(_materialize_array_backed_list(body_qd, descriptor))
 
         source_filter_pairs = builder._shape_collision_filter_pairs
         if source_filter_pairs:

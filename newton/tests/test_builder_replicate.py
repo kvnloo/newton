@@ -9,7 +9,7 @@ from unittest import mock
 import numpy as np
 import warp as wp
 
-from newton import Mesh, Model, ModelBuilder
+from newton import Mesh, Model, ModelBuilder, eval_fk
 from newton._src.sim.builder import _ARRAY_BACKED_ATTRIBUTE_DTYPES, _materialize_array_backed_list
 from newton.actuators import DrivePD
 from newton.tests.unittest_utils import add_function_test, get_test_devices
@@ -180,6 +180,178 @@ class TestModelBuilderReplicate(unittest.TestCase):
                         actual.replicate(source, world_count, spacing)
 
                         self.assert_builder_merge_state_equal(expected, actual)
+
+    def test_copy_rotation_rotates_world_velocities(self):
+        """Yaw rotates world-frame position and twist; a pure translation does not change velocity."""
+
+        def make_source() -> ModelBuilder:
+            builder = ModelBuilder()
+            root = builder.add_link(xform=wp.transform((1.0, 0.0, 0.0), wp.quat_identity()), label="root")
+            builder.body_qd[root] = wp.spatial_vector(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            free = builder.add_joint_free(child=root, label="free")
+            qd_start = builder.joint_qd_start[free]
+            builder.joint_qd[qd_start : qd_start + 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            child = builder.add_link(xform=wp.transform((2.0, 0.0, 0.0), wp.quat_identity()), label="child")
+            hinge = builder.add_joint_revolute(parent=root, child=child, axis=(0.0, 0.0, 1.0), label="hinge")
+            builder.joint_qd[builder.joint_qd_start[hinge]] = 0.5
+            builder.body_qd[child] = wp.spatial_vector(0.0, 0.0, 1.0, 0.0, 1.0, 0.0)
+            return builder
+
+        yaw = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
+        yaw_xform = wp.transform((0.0, 0.0, 0.0), yaw)
+        for merge in ("add_world", "replicate"):
+            with self.subTest(merge=merge):
+                scene = ModelBuilder()
+                if merge == "add_world":
+                    scene.add_world(make_source(), yaw_xform)
+                else:
+                    scene.replicate(make_source(), 1, xforms=[yaw_xform])
+
+                body_q = np.asarray(scene.body_q, dtype=np.float32)
+                body_qd = np.asarray(scene.body_qd, dtype=np.float32)
+                np.testing.assert_allclose(body_q[0, :3], [0.0, 1.0, 0.0], atol=1e-5)
+                np.testing.assert_allclose(body_q[1, :3], [0.0, 2.0, 0.0], atol=1e-5)
+                expected_yaw = np.broadcast_to(np.asarray(yaw, dtype=np.float32), (2, 4))
+                np.testing.assert_allclose(body_q[:, 3:], expected_yaw, atol=1e-5)
+                np.testing.assert_allclose(body_qd[0], [0.0, 1.0, 0.0, 0.0, 1.0, 0.0], atol=1e-5)
+                np.testing.assert_allclose(body_qd[1], [0.0, 0.0, 1.0, -1.0, 0.0, 0.0], atol=1e-5)
+                joint_qd = np.asarray(scene.joint_qd, dtype=np.float32)
+                np.testing.assert_allclose(joint_qd[:6], [0.0, 1.0, 0.0, 0.0, 1.0, 0.0], atol=1e-5)
+                np.testing.assert_allclose(joint_qd[6], 0.5, atol=1e-6)
+                free_q = np.asarray(scene.joint_q[:7], dtype=np.float32)
+                np.testing.assert_allclose(free_q[:3], [0.0, 1.0, 0.0], atol=1e-5)
+
+        source = make_source()
+        translated = ModelBuilder()
+        translated.add_world(source, wp.transform((5.0, -2.0, 3.0), wp.quat_identity()))
+        np.testing.assert_array_equal(np.asarray(translated.body_qd), np.asarray(source.body_qd))
+        np.testing.assert_array_equal(np.asarray(translated.joint_qd), np.asarray(source.joint_qd))
+        np.testing.assert_allclose(np.asarray(translated.body_q[0])[:3], [6.0, -2.0, 3.0], atol=1e-6)
+
+        replicated = ModelBuilder()
+        replicated.replicate(source, 1, xforms=[wp.transform((5.0, -2.0, 3.0), wp.quat_identity())])
+        np.testing.assert_array_equal(np.asarray(replicated.body_qd), np.asarray(source.body_qd))
+        np.testing.assert_array_equal(np.asarray(replicated.joint_qd), np.asarray(source.joint_qd))
+
+    def test_copy_rotation_preserves_fk_with_parent_frames_and_prefixes(self):
+        """Rotate COM twists consistently through FK with non-identity parent frames."""
+        source = ModelBuilder()
+        root = source.add_link(xform=wp.transform((1.2, -0.7, 2.3), wp.quat_rpy(0.15, -0.3, 0.25)), label="root")
+        source.add_shape_box(root, xform=wp.transform((0.2, -0.1, 0.3), wp.quat_identity()), hx=0.2, hy=0.3, hz=0.4)
+        free = source.add_joint_free(
+            child=root, parent_xform=wp.transform((0.4, -0.2, 0.1), wp.quat_rpy(0.35, 0.2, -0.45))
+        )
+        source.add_articulation([free])
+        source.joint_qd[:] = [0.75, -0.3, 0.2, -0.6, 0.8, 0.1]
+        model = source.finalize(device="cpu")
+        state = model.state()
+        eval_fk(model, model.joint_q, model.joint_qd, state)
+        source_q = state.body_q.numpy()[0]
+        source_qd = state.body_qd.numpy()[0]
+        source.body_qd[root] = wp.spatial_vector(*source_qd)
+        original_joint_qd = np.asarray(source.joint_qd).copy()
+        xforms = [
+            wp.transform((4.0, 1.0, -2.0), wp.quat_identity()),
+            wp.transform((0.7, -0.8, 0.3), wp.quat_rpy(0.4, -0.6, 0.7)),
+            wp.transform((-2.0, 3.0, 1.0), wp.quat_rpy(-0.25, 0.45, 1.2)),
+        ]
+
+        for merge in ("add_world", "replicate"):
+            with self.subTest(merge=merge):
+                scene = ModelBuilder()
+                scene.add_world(source, xforms[0])
+                prefix_qd = np.asarray(scene.joint_qd).copy()
+                if merge == "replicate":
+                    scene.replicate(source, len(xforms) - 1, xforms=xforms[1:])
+                else:
+                    for xform in xforms[1:]:
+                        scene.add_world(source, xform)
+                np.testing.assert_array_equal(np.asarray(source.joint_qd), original_joint_qd)
+                np.testing.assert_array_equal(np.asarray(scene.joint_qd)[: len(prefix_qd)], prefix_qd)
+                merged_model = scene.finalize(device="cpu")
+                merged_state = merged_model.state()
+                eval_fk(merged_model, merged_model.joint_q, merged_model.joint_qd, merged_state)
+                actual_q = merged_state.body_q.numpy()
+                actual_qd = merged_state.body_qd.numpy()
+                for world, xform in enumerate(xforms):
+                    with self.subTest(world=world):
+                        expected_q = np.asarray(wp.transform_multiply(xform, wp.transform(*source_q)))
+                        expected_qd = np.concatenate(
+                            [
+                                np.asarray(wp.quat_rotate(xform.q, wp.vec3(*source_qd[:3]))),
+                                np.asarray(wp.quat_rotate(xform.q, wp.vec3(*source_qd[3:]))),
+                            ]
+                        )
+                        np.testing.assert_allclose(actual_q[world], expected_q, atol=2e-6)
+                        np.testing.assert_allclose(actual_qd[world], expected_qd, atol=2e-6)
+
+    def test_copy_preserves_unrotated_joint_velocity_precision(self):
+        """Preserve source precision for unrotated and non-free joint velocities."""
+        source = ModelBuilder()
+        root = source.add_link(label="root")
+        free = source.add_joint_free(child=root)
+        child = source.add_link(label="child")
+        hinge = source.add_joint_revolute(parent=root, child=child)
+        source.add_articulation([free, hinge])
+        values = [0.1, 1.0000000001, -0.1, 0.0, -0.0, 1.0000000002, 0.1000000001]
+        source.joint_qd[:] = values
+        original = np.asarray(source.joint_qd).copy()
+        xforms = [
+            None,
+            wp.transform((1.0, -2.0, 3.0), wp.quat_identity()),
+            wp.transform((1.0, -2.0, 3.0), wp.quat_rpy(0.25, -0.5, 0.75)),
+        ]
+
+        for merge in ("add_builder", "add_world", "replicate"):
+            for index, xform in enumerate(xforms):
+                with self.subTest(merge=merge, transform=index):
+                    scene = ModelBuilder()
+                    if merge == "replicate":
+                        if xform is None:
+                            scene.replicate(source, 2)
+                        else:
+                            scene.replicate(source, 2, xforms=[xform, xform])
+                    else:
+                        for _ in range(2):
+                            getattr(scene, merge)(source, xform=xform)
+                    actual = np.asarray(scene.joint_qd).reshape(2, len(original))
+                    if index < 2:
+                        np.testing.assert_array_equal(actual, np.tile(original, (2, 1)))
+                    else:
+                        np.testing.assert_array_equal(actual[:, -1], [original[-1], original[-1]])
+                    np.testing.assert_array_equal(np.asarray(source.joint_qd), original)
+
+    def test_copy_preserves_unrotated_body_velocity_precision(self):
+        """Preserve float64 body velocities in identity and mixed-rotation copies."""
+        source = ModelBuilder()
+        source.add_link()
+        source.body_qd = np.array([[0.1, 1.0000000001, -0.1, 0.0, 0.25, 1.0000000002]], dtype=np.float64)
+        original = source.body_qd.copy()
+        translation = wp.transform((1.0, -2.0, 3.0), wp.quat_identity())
+        rotation = wp.transform((0.0, 0.0, 0.0), wp.quat_rpy(0.25, -0.5, 0.75))
+        for merge in ("add_builder", "add_world", "replicate"):
+            for xforms in ([None, None], [translation, translation], [None, rotation, translation]):
+                with self.subTest(merge=merge, copies=len(xforms), first=xforms[0]):
+                    scene = ModelBuilder()
+                    if merge == "replicate":
+                        scene.replicate(source, len(xforms), xforms=xforms)
+                    else:
+                        for xform in xforms:
+                            getattr(scene, merge)(source, xform=xform)
+                    actual = np.asarray(scene.body_qd)
+                    self.assertEqual(actual.dtype, np.float64)
+                    for world, xform in enumerate(xforms):
+                        if xform is rotation:
+                            expected = np.concatenate(
+                                [
+                                    np.asarray(wp.quat_rotate(rotation.q, wp.vec3(*original[0, :3]))),
+                                    np.asarray(wp.quat_rotate(rotation.q, wp.vec3(*original[0, 3:]))),
+                                ]
+                            )
+                            np.testing.assert_allclose(actual[world], expected, atol=1e-6)
+                        else:
+                            np.testing.assert_array_equal(actual[world], original[0])
+                    np.testing.assert_array_equal(source.body_qd, original)
 
     def test_replicate_matches_add_world_loop_with_explicit_transforms(self):
         source = self._make_source()
