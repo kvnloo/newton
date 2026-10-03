@@ -22,6 +22,25 @@ from newton.tests.unittest_utils import assert_np_equal
 
 
 class TestInertia(unittest.TestCase):
+    def test_cached_mesh_inertia_matches_rescaled_geometry(self):
+        vertices = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.2, 1.0, 0.0], [0.3, 0.4, 1.0]],
+            dtype=np.float32,
+        )
+        indices = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32)
+        mesh = newton.Mesh(vertices=vertices, indices=indices, compute_inertia=True)
+        self.assertTrue(mesh.has_inertia)
+        for scale in ((2.0, 0.5, 1.5), (0.5, -1.25, 2.0)):
+            cached = compute_inertia_shape(GeoType.MESH, scale, mesh, 1.0, True)
+            direct_m, direct_c, direct_I, _ = compute_inertia_mesh(
+                1.0, vertices * np.array(scale, dtype=np.float32), indices, is_solid=True
+            )
+            self.assertAlmostEqual(cached[0], direct_m, places=4)
+            np.testing.assert_allclose(np.array(cached[1]), np.array(direct_c), atol=1e-4)
+            np.testing.assert_allclose(np.array(cached[2]).reshape(3, 3), np.array(direct_I).reshape(3, 3), atol=1e-4)
+            # Mass follows |det(scale)| and COM follows the signed scale.
+            self.assertAlmostEqual(cached[0], mesh.mass * abs(scale[0] * scale[1] * scale[2]), places=4)
+
     def test_cube_mesh_inertia(self):
         # Unit cube
         vertices = [
