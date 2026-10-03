@@ -578,6 +578,56 @@ def jcalc_tau(
         return
 
 
+@wp.kernel
+def apply_implicit_joint_limit_terms(
+    joint_type: wp.array[int],
+    joint_q_start: wp.array[int],
+    joint_qd_start: wp.array[int],
+    joint_dof_dim: wp.array2d[int],
+    joint_q: wp.array[float],
+    joint_qd: wp.array[float],
+    joint_limit_lower: wp.array[float],
+    joint_limit_upper: wp.array[float],
+    joint_limit_ke: wp.array[float],
+    joint_limit_kd: wp.array[float],
+    joint_armature: wp.array[float],
+    dt: float,
+    joint_tau: wp.array[float],
+    solve_armature: wp.array[float],
+):
+    """Fold active joint-limit spring and damping terms into the acceleration solve."""
+    joint = wp.tid()
+    dof_start = joint_qd_start[joint]
+    dof_end = joint_qd_start[joint + 1]
+
+    for dof in range(dof_start, dof_end):
+        solve_armature[dof] = joint_armature[dof]
+
+    type = joint_type[joint]
+    if type != JointType.PRISMATIC and type != JointType.REVOLUTE and type != JointType.D6:
+        return
+
+    coord_start = joint_q_start[joint]
+    axis_count = joint_dof_dim[joint, 0] + joint_dof_dim[joint, 1]
+    for i in range(axis_count):
+        dof = dof_start + i
+        q = joint_q[coord_start + i]
+        qd = joint_qd[dof]
+        lower = joint_limit_lower[dof]
+        upper = joint_limit_upper[dof]
+
+        if q < lower or q > upper:
+            ke = joint_limit_ke[dof]
+            kd = joint_limit_kd[dof]
+
+            # jcalc_tau already contributes ke * (limit - q) - kd * qd.
+            # Evaluating that spring at q_next = q + dt * (qd + dt * qdd)
+            # adds -dt * ke * qd to the RHS and (dt * kd + dt^2 * ke)
+            # to the generalized inertia diagonal.
+            joint_tau[dof] -= dt * ke * qd
+            solve_armature[dof] += dt * kd + dt * dt * ke
+
+
 @wp.func
 def jcalc_integrate(
     parent: int,
