@@ -39,6 +39,7 @@ from .kernels import (
     create_inertia_matrix_kernel,
     eval_dense_cholesky_batched,
     eval_dense_gemm_batched,
+    eval_dense_gemm_batched_elementwise,
     eval_dense_solve_batched,
     eval_fk_with_velocity_conversion,
     eval_fk_with_velocity_conversion_from_joint_starts,
@@ -55,6 +56,21 @@ from .kernels import (
     zero_kinematic_body_forces,
     zero_kinematic_joint_qdd,
 )
+
+
+def _prefer_elementwise_dense_gemm(
+    is_cuda: bool,
+    articulation_count: int,
+    max_output_elements: int,
+) -> bool:
+    """Select element-parallel GEMM only where the measured GPU crossover is clear."""
+    if not is_cuda:
+        return False
+    if max_output_elements <= 4:
+        return False
+    if articulation_count == 1 and max_output_elements <= 6:
+        return False
+    return True
 
 
 class SolverFeatherstone(SolverBase, CouplingInterface):
@@ -306,6 +322,8 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
             articulation_H_rows = []
             articulation_J_rows = []
             articulation_J_cols = []
+            articulation_P_elements = []
+            articulation_H_elements = []
 
             articulation_dof_start = []
             articulation_coord_start = []
@@ -338,6 +356,8 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                 articulation_H_rows.append(dof_count)
                 articulation_J_rows.append(joint_count * 6)
                 articulation_J_cols.append(dof_count)
+                articulation_P_elements.append(joint_count * 6 * dof_count)
+                articulation_H_elements.append(dof_count * dof_count)
 
                 if self.use_tile_gemm:
                     # store the joint and dof count assuming all
@@ -358,6 +378,19 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
             self.articulation_H_rows = wp.array(articulation_H_rows, dtype=wp.int32, device=model.device)
             self.articulation_J_rows = wp.array(articulation_J_rows, dtype=wp.int32, device=model.device)
             self.articulation_J_cols = wp.array(articulation_J_cols, dtype=wp.int32, device=model.device)
+
+            self._max_P_elements = max(articulation_P_elements, default=0)
+            self._max_H_elements = max(articulation_H_elements, default=0)
+            self._use_elementwise_P = _prefer_elementwise_dense_gemm(
+                model.device.is_cuda,
+                model.articulation_count,
+                self._max_P_elements,
+            )
+            self._use_elementwise_H = _prefer_elementwise_dense_gemm(
+                model.device.is_cuda,
+                model.articulation_count,
+                self._max_H_elements,
+            )
 
             self.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32, device=model.device)
             self.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32, device=model.device)
@@ -868,8 +901,14 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                         else:
                             # form P = M*J
                             wp.launch(
-                                eval_dense_gemm_batched,
-                                dim=model.articulation_count,
+                                eval_dense_gemm_batched_elementwise
+                                if self._use_elementwise_P
+                                else eval_dense_gemm_batched,
+                                dim=(
+                                    (model.articulation_count, self._max_P_elements)
+                                    if self._use_elementwise_P
+                                    else model.articulation_count
+                                ),
                                 inputs=[
                                     self.articulation_M_rows,
                                     self.articulation_J_cols,
@@ -889,8 +928,14 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
 
                             # form H = J^T*P
                             wp.launch(
-                                eval_dense_gemm_batched,
-                                dim=model.articulation_count,
+                                eval_dense_gemm_batched_elementwise
+                                if self._use_elementwise_H
+                                else eval_dense_gemm_batched,
+                                dim=(
+                                    (model.articulation_count, self._max_H_elements)
+                                    if self._use_elementwise_H
+                                    else model.articulation_count
+                                ),
                                 inputs=[
                                     self.articulation_J_cols,
                                     self.articulation_J_cols,
