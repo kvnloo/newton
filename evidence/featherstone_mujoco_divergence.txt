@@ -1,0 +1,185 @@
+Featherstone vs MuJoCo step comparison (issue newton-physics/newton#4269)
+Recorded 2026-09-27 on branch evidence/featherstone-divergence
+SHA at investigation start: 3b7c3c848b9ff012ab28273d09dc00523dcd961b
+Python: /mnt/zer0models/github/kvnloo/newton/.venv/bin/python
+PYTHONPATH=/tmp/newton-4269
+MuJoCo package version reported by pip: 3.12.0
+Device: Warp CPU. dt = 1/240 = 0.0041666667 s.
+No contacts. control left at defaults (zero joint_f, targets from the model).
+Identical newton.Model and identical initial joint_q / joint_qd for every solver.
+Solvers:
+  fs   SolverFeatherstone(angular_damping=0.05)   # constructor default
+  fs0  SolverFeatherstone(angular_damping=0.0)
+  mjE  SolverMuJoCo(integrator="euler")
+  mjI  SolverMuJoCo(integrator="implicitfast")   # Newton SolverMuJoCo default
+Material divergence: max |joint_q| difference > 1e-2, or max |joint_qd| difference > 1e-1,
+or any non-finite value, or max |joint_q| > 1e3.
+
+No code change. The first broken step is an explicit joint-limit penalty outside
+its stability region, not a mass-matrix factorization error. See the invariant section.
+
+================================================================================
+1. Serial arm, 6 revolute Y joints, links along +X (gravity produces torque)
+   mass=0.05 each, inertia diag=1e-5, length=0.1 m
+   limits [-0.5, 0.5], limit_ke=1e4, limit_kd=10, target_ke=target_kd=damping=armature=0
+   q0 = 0, qd0 = 0, gravity = (0, 0, -9.81)
+   H (Featherstone, q=0, armature NOT folded into H): min_eig=9.5954746e-06
+     max_eig=0.051050868 cond=5320.3068 symmetry defect=9.3132257e-10
+
+   Step 0 (t=0.00416667), forces are gravity bias only (inside limits):
+     tau_fs = [0.73575, 0.4905, 0.2943, 0.14715, 0.04905, 0]
+     qdd_fs = [96.21335, -94.36314, -1.814437, -0.03516121, -0.0006010341, -1.579103e-05]
+     qdd_mjE = [96.21199, -94.35983, -1.817037, -0.03410101, -0.001117612, 0.0001001797]
+     max |qdd_fs - H^{-1} tau| = 6.0729e-04
+     max |q_fs - q_mjE| = 5.750917e-08
+     max |qd_fs - qd_mjE| = 1.3798475e-05
+     qd_fs = [0.400889, -0.393180, -0.007560156, -0.000146505, -2.504309e-06, -6.579596e-08]
+
+   Still inside the limit, agreement holds through step 26:
+     step 26 (t=0.11250) q_fs[0]=0.5272407  (limit is 0.5; crossed during this step)
+     tau_fs[0]=0.802562   (still the gravity bias; pre-step q was 0.4985009 < 0.5)
+     qdd_fs[0]=-10.57108
+     max |q_fs-q_mjE|=7.3589217e-06
+     max |qd_fs-qd_mjE|=4.9829483e-05
+     max |qdd_fs - H^{-1} tau|=1.4308e-04
+
+   FIRST MATERIAL DIVERGENCE: step 27, t=0.1166667 s
+     Pre-step state is the step-26 result, penetration = 0.5272407-0.5 = 0.0272407 rad,
+     qd[0]=6.897536.
+     Explicit limit law: ke*(lower_or_upper - q) - kd*qd + gravity
+       = 10000*(0.5-0.5272407) - 10*6.897536 + ~0.80256
+       = -272.407 - 68.975 + 0.803 = -340.58
+     tau_fs = [-340.5817, 0.6039758, 0.3724343, 0.1867384, 0.06225818, -7.820724e-09]
+     qdd_fs = [-420576.9, 852956.8, -491261.5, 52799.21, 5786.225, 274.3375]
+     max |qdd_fs - H^{-1} tau| = 6.7835   (relative ~1.6e-5 on the 4.2e5 entry; float32 solve)
+     q_fs  = [-6.745703, 14.39848, -8.660835, 0.9032368, 0.09970716, 0.004741826]
+     qd_fs = [-1745.506, 3551.496, -2050.738, 219.4417, 24.07300, 1.141595]
+     q_mjE = [0.5004575, -0.2956535, -0.1978185, -0.006960200, -3.357476e-05, 8.382700e-06]
+     qd_mjE= [-6.427489, 24.90342, -19.61312, 0.9943034, 0.1355517, 0.007334623]
+     q_mjI and qd_mjI match q_mjE / qd_mjE at this step (same printed values as mjE in the paired run)
+     max |q_fs-q_mj| = 14.694134
+     max |qd_fs-qd_mj| = 3526.593
+
+   Step 28, t=0.120833 s: |q_fs| max = 6867.05, |qd_fs| max = 1.651547e+06 (finite).
+   fs and fs0 both explode on this same step. mjE and mjI remain O(1).
+   NaNs in fs joint_q appear by step 32, t=0.1375 s (fs and fs0 together).
+
+   Stability check at the first bad acceleration:
+     lambda_min(H) = 9.5954746e-06, limit_ke = 1e4
+     omega_pen ~ sqrt(limit_ke / lambda_min(H)) = sqrt(1.042158e9) ~ 3.228e4 rad/s
+     explicit spring dt must be << 2/omega ~ 6.2e-5 s
+     dt / (2/omega) ~ 67
+     One step of penetration 0.02724 rad is enough for |tau|~340 and |qdd|~4.21e5.
+
+2. Same arm, inertia diag=1e-4, mass=0.2, limits +/-1.57, q0=0.2
+   H: min_eig=8.9988402e-05 max_eig=0.19477576 cond=2164.454 sym=4.6056812e-09
+   Step 0 qdd_fs[0]=102.8081, qdd_mjE[0]=102.80764
+   FIRST MATERIAL: step 68, t=0.2875 s
+     q_fs  = [0.69632, 1.66838, -0.7144, -0.38282, -1.00014, 0.93264]
+     q_mj  = [1.54644, 0.0161, 0.02016, -0.29292, -0.97297, 0.88319]
+     max |dq|=1.652278  max |dqd|=396.547
+   EXPLODE step 70, t=0.295833 s: max |q_fs|=32090.2, max |qd_fs|=7.70524e+06
+   fs and fs0 together. mjE and mjI stay bounded (at t=0.33333 max |q_mj|=1.40104).
+
+3. Same arm as (1) but limits +/-0.05 and q0=0.049 (one step from the stop)
+   Step 0 still agrees: qdd_fs[0]=97.00952, qdd_mjE[0]=97.00923, q ends at 0.0506842.
+   FIRST MATERIAL: step 1, t=0.00833333 s
+     q_fs  = [-0.30631, 0.75986, -0.30137, 0.04225, 0.04891, 0.05065]
+     q_mj  = [0.05011, 0.05186, 0.04507, 0.04892, 0.04900, 0.04904]
+     max |dq|=0.708004  max |dqd|=169.921
+     |qdd_fs| max = 41136.7, |qdd_mjE| max = 355.693
+   EXPLODE step 3, t=0.0166667 s: max |q|=1.4628e+06, max |qd|=3.51269e+08
+
+4. Same arm as (1) with joint_armature=0.1 on every DOF
+   No explosion in 200 steps. Limit response still differs from MuJoCo.
+   FIRST MATERIAL: step 108, t=0.454167 s
+     max |dq|=0.01061505  max |dqd|=2.547641
+   At t=0.66667: max |q| fs=0.4489, mjE=0.450109; max |qd| fs=1.41597, mjE=1.79777.
+
+5. Same arm as (1), gravity 0, q0=0.2 (inside +/-0.5)
+   qdd = 0 on step 0 for fs, fs0, mjE, mjI. State unchanged through t=0.33333 s.
+   No divergence.
+
+6. Vertical serial arm (axis Y, links stacked on Z, COM on the joint axis)
+   Gravity torque is identically 0. q and qd stay 0 for fs and both MuJoCo
+   integrators through t=0.8375 s. H cond=217.284, min_eig=0.000111354.
+   Morphology alone does not diverge.
+
+================================================================================
+7. cartpole.urdf (repo asset), fixed base, collapse_fixed_joints, no self-collision
+   3 bodies, 3 DoF. limits: slider [-4, 4], two hinges +/-1e10, limit_ke=1e4.
+   Upright q=0 is an equilibrium: qdd=0 for all four solvers through t=1.0 s.
+   Tilted q0 = [0, 0.4, -0.2] (poles off vertical; hinges are effectively unlimited):
+     t=0.00416667  max|dq|=1.27329e-11  max|dqd|=4.09782e-08
+     t=1.0         max|dq|=1.66893e-06  max|dqd|=1.14441e-05   max|q_fs|=3.57513  max|qd_fs|=6.02108
+     t=2.0         max|dq|=2.86102e-06  max|dqd|=1.81198e-05   max|q_fs|=8.33011  max|qd_fs|=10.8224
+   No material divergence over 2 s. fs vs mjI.
+
+8. quadruped.urdf (repo asset), floating base, no self-collision, no ground
+   13 bodies, 18 DoF, 19 coords. Revolute limits are +/-1e10 (URDF has no position limits).
+   limit_ke is 0 on the free joint and 1e4 on the legs; the legs never reach a finite stop.
+   H at q0: min_eig=0.0028445657 max_eig=31.417346 cond=11044.69 sym=4.7683716e-07
+   Step 0 qdd_z (free linear) = -9.810000 fs and -9.810001 mjE. qd_z = -0.040875 both.
+   fs vs mjI:
+     t=0.00416667  max|dq|=2.81318e-09  max|dqd|=6.75163e-07
+     t=1.0         max|dq|=7.09708e-05  max|dqd|=1.02883e-04  max|q|=4.92544 (falling root)
+     t=2.0         max|dq|=1.42371e-04  max|dqd|=1.34536e-04  max|q|=19.6609 max|qd|=19.62
+   No material divergence. fs and fs0 match each other on the free-fall (angular_damping
+   does not move the reported max |dq| across the 1e-2 / 1e-1 thresholds).
+
+9. nv_humanoid.xml (repo asset), no self-collision, no ground
+   13 bodies, 27 DoF, 28 coords. Some hinge limits are finite (first limited entries
+   lower -0.7854 / -1.309, upper 0.7854 / 0.5236) but the passive free-fall from the
+   authored pose does not drive them into the penalty inside 2 s.
+   H at q0: min_eig=0.005098598 max_eig=56.739037 cond=11128.361 sym=1.9073486e-06
+   Step 0 qdd_z = -9.810011 fs, -9.810000 mjE. qd_z = -0.04087505 fs, -0.04087500 mjE.
+   fs vs mjI:
+     t=0.00416667  max|dq|=2.31442e-09  max|dqd|=5.5546e-07
+     t=1.0         max|dq|=6.2443e-06   max|dqd|=1.22585e-05
+     t=2.0         max|dq|=2.24965e-05  max|dqd|=1.8951e-05
+                  max|q_fs|=19.6609 max|qd_fs|=19.62 (root free-fall, g*t and 0.5*g*t^2)
+   No material divergence and no non-finite value in 2 s.
+
+================================================================================
+Invariant
+
+Before any joint coordinate crosses joint_limit_lower/upper, Featherstone and
+MuJoCo Euler agree to about 1e-5 on qd and 1e-7 on q (serial arm) or better
+(cartpole). On every recorded step, Featherstone's joint_qdd matches H^{-1} tau
+to a float32 residual (6e-4 absolute on O(1e2) accelerations; 6.8 absolute on
+a 4.2e5 acceleration). H is symmetric to ~1e-9 and positive definite
+(min eigenvalue > 0) on the serial arm. That rules out a broken CRBA product
+or a bad Cholesky sign as the first failure.
+
+The first violated condition is the explicit-penalty stability restriction
+    dt <~ 2 / sqrt(limit_ke / lambda_min(H))
+On the 6-DoF arm, lambda_min(H)=9.5954746e-06 and limit_ke=1e4, so the bound
+is about 6.2e-5 s and the timestep used is 4.167e-3 s (~67x larger). The
+spring is applied to the pre-step coordinate (jcalc_tau / joint_force). The
+step that first exceeds the stop therefore still integrates the unbiased
+acceleration; the next step sees the full ke*penetration - kd*qd and the
+symplectic Euler update leaves the limit by O(10) radians in one step.
+MuJoCo, with the same model, keeps the joint at the stop under both
+integrator="euler" and integrator="implicitfast", so the split is limit
+enforcement (explicit spring vs MuJoCo constraint impedance), not Featherstone
+vs MuJoCo rigid-body bias forces, and not chain length by itself.
+
+Repo quadruped and humanoid passive free-falls do not reach a finite joint
+stop in 2 s, and they do not diverge. A serial arm with the same integrator
+also does not diverge when gravity torque is zero or when the hinges are
+effectively unlimited (cartpole tilt). The morphology correlation in the
+upstream report is consistent with long arms sweeping into stiff limit_ke
+springs on small generalized inertia; it is not evidence that the articulated-
+body recurrence is special-cased wrong for serial chains.
+
+angular_damping 0.05 vs 0.0 does not move the explosion step.
+joint_armature=0.1 prevents the blow-up on this arm but the trajectory still
+leaves MuJoCo by max|dq|=0.0106 at t=0.454 s, because the limit law is still
+a different model.
+
+No solver patch: a one-line clamp or an implicit limit would change the
+published explicit-spring semantics, and the mass-matrix solve is already
+consistent with tau. Upstream assets from SO-ARM100 were not in this repo and
+were not rerun; the serial arm above is a Newton ModelBuilder model with the
+same joint-limit parameters ModelBuilder uses by default (limit_ke=1e4,
+limit_kd=10).
