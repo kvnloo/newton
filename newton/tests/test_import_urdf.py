@@ -2154,6 +2154,57 @@ class TestMimicConstraints(unittest.TestCase):
         self.assertAlmostEqual(coeffs[0], 0.0, places=5)
         self.assertAlmostEqual(coeffs[1], 1.0, places=5)
 
+    def test_mimic_prismatic_offset_follows_coordinate_scale(self):
+        """Prismatic mimic offsets are lengths; revolute offsets stay in radians.
+
+        A non-unit import scale converts prismatic coordinates, so the follower
+        offset must be scaled with them. Multipliers are dimensionless. Scale 1
+        leaves both offsets untouched.
+        """
+        urdf = """
+        <robot name="mimic_scale">
+            <link name="base"/>
+            <link name="rev_leader_link"/>
+            <link name="rev_follower_link"/>
+            <link name="pri_leader_link"/>
+            <link name="pri_follower_link"/>
+            <joint name="rev_leader" type="revolute">
+                <parent link="base"/><child link="rev_leader_link"/>
+                <axis xyz="0 0 1"/><limit lower="-1" upper="1"/>
+            </joint>
+            <joint name="rev_follower" type="revolute">
+                <parent link="base"/><child link="rev_follower_link"/>
+                <axis xyz="0 0 1"/><limit lower="-1" upper="1"/>
+                <mimic joint="rev_leader" multiplier="2.0" offset="0.25"/>
+            </joint>
+            <joint name="pri_leader" type="prismatic">
+                <parent link="base"/><child link="pri_leader_link"/>
+                <axis xyz="1 0 0"/><limit lower="-0.5" upper="0.5"/>
+            </joint>
+            <joint name="pri_follower" type="prismatic">
+                <parent link="base"/><child link="pri_follower_link"/>
+                <axis xyz="0 1 0"/><limit lower="-1" upper="1"/>
+                <mimic joint="pri_leader" multiplier="3.0" offset="0.25"/>
+            </joint>
+        </robot>
+        """
+
+        def coeffs_for(scale: float):
+            builder = newton.ModelBuilder()
+            builder.add_urdf(urdf, scale=scale)
+            model = builder.finalize()
+            rev = model.joint_label.index("mimic_scale/rev_follower")
+            pri = model.joint_label.index("mimic_scale/pri_follower")
+            return model.joint_mimic_coeffs.numpy()[rev], model.joint_mimic_coeffs.numpy()[pri]
+
+        rev_s1, pri_s1 = coeffs_for(1.0)
+        np.testing.assert_allclose(rev_s1, (0.25, 2.0))
+        np.testing.assert_allclose(pri_s1, (0.25, 3.0))
+
+        rev_s2, pri_s2 = coeffs_for(2.0)
+        np.testing.assert_allclose(rev_s2, (0.25, 2.0))
+        np.testing.assert_allclose(pri_s2, (0.5, 3.0))
+
     def test_mimic_joint_skipped_child_does_not_mismatch(self):
         """Regression test: skipped joints must not be included in name->index mapping."""
 
