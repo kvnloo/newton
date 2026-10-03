@@ -15,6 +15,7 @@ from .kernels import (
     accumulate_weighted_contact_impulse,
     apply_body_delta_velocities,
     apply_body_deltas,
+    apply_joint_drive_forces,
     apply_joint_forces,
     apply_particle_deltas,
     apply_particle_shape_restitution,
@@ -95,8 +96,13 @@ class SolverXPBD(SolverBase, CouplingInterface):
           :attr:`~newton.Model.joint_target_ke`/:attr:`~newton.Model.joint_target_kd`, and
           :attr:`~newton.Control.joint_f` are supported.
           Joint limits are enforced as hard positional constraints (``joint_limit_ke``/``joint_limit_kd`` are not used).
+        - Joint position drives (``joint_target_ke > 0``) are a backward-Euler PD
+          wrench applied once per step and clamped to :attr:`~newton.Model.joint_effort_limit`.
+          Their static stiffness tracks ``joint_target_ke`` at any iteration count.
+          Velocity-only drives (``joint_target_ke == 0`` and ``joint_target_kd > 0``) stay
+          inside the iteration loop.
         - :attr:`~newton.Model.joint_armature`, :attr:`~newton.Model.joint_friction`,
-          :attr:`~newton.Model.joint_effort_limit`, :attr:`~newton.Model.joint_velocity_limit`,
+          :attr:`~newton.Model.joint_velocity_limit`,
           and :attr:`~newton.Model.joint_target_mode` are not supported.
         - Joint-owned mimic relationships are supported for PRISMATIC, REVOLUTE, and D6 joints.
           Equality constraints and the deprecated sparse mimic constraints are not supported.
@@ -546,6 +552,35 @@ class SolverXPBD(SolverBase, CouplingInterface):
                             model.joint_dof_dim,
                             model.joint_axis,
                             control.joint_f,
+                            dt,
+                        ],
+                        outputs=[body_f_tmp, joint_impulse],
+                        device=model.device,
+                    )
+                    wp.launch(
+                        kernel=apply_joint_drive_forces,
+                        dim=model.joint_count,
+                        inputs=[
+                            state_in.body_q,
+                            state_in.body_qd,
+                            model.body_com,
+                            self.body_inv_inertia_effective,
+                            self.body_inv_mass_effective,
+                            model.joint_type,
+                            model.joint_enabled,
+                            model.joint_parent,
+                            model.joint_child,
+                            model.joint_X_p,
+                            model.joint_X_c,
+                            model.joint_qd_start,
+                            model.joint_target_q_start,
+                            model.joint_dof_dim,
+                            model.joint_axis,
+                            control.joint_target_q,
+                            control.joint_target_qd,
+                            model.joint_target_ke,
+                            model.joint_target_kd,
+                            model.joint_effort_limit,
                             dt,
                         ],
                         outputs=[body_f_tmp, joint_impulse],
