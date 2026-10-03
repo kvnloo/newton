@@ -60,15 +60,7 @@ def test_implicit_limit_terms(test: TestFeatherstoneImplicitJointLimits, device)
 def _make_limit_model(device):
     builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
     inertia = wp.mat33(
-        1.0e-5,
-        0.0,
-        0.0,
-        0.0,
-        1.0e-5,
-        0.0,
-        0.0,
-        0.0,
-        1.0e-5,
+        [[1.0e-5, 0.0, 0.0], [0.0, 1.0e-5, 0.0], [0.0, 0.0, 1.0e-5]]
     )
     body = builder.add_link(mass=0.05, inertia=inertia, com=wp.vec3())
     joint = builder.add_joint_revolute(
@@ -130,6 +122,49 @@ def test_implicit_limit_stabilizes_low_inertia_hinge(test: TestFeatherstoneImpli
     test.assertLess(abs(implicit_q - 0.5), abs(explicit_q - 0.5))
     test.assertLess(abs(implicit_q), 1.0)
 
+    state_in, state_out = implicit_out, implicit_in
+    for _ in range(63):
+        implicit.step(state_in, state_out, control, None, dt)
+        state_in, state_out = state_out, state_in
+
+    final_q = float(state_in.joint_q.numpy()[0])
+    final_qd = float(state_in.joint_qd.numpy()[0])
+    test.assertTrue(np.isfinite(final_q))
+    test.assertTrue(np.isfinite(final_qd))
+    test.assertLess(abs(final_q - 0.5), 1.0e-3)
+
+
+def test_inactive_limits_match_existing_path(test: TestFeatherstoneImplicitJointLimits, device):
+    """Verify inactive limits leave the existing Featherstone trajectory unchanged."""
+    model = _make_limit_model(device)
+    model.joint_q.assign([0.0])
+    model.joint_qd.assign([0.25])
+    control = model.control()
+    dt = 1.0 / 240.0
+
+    explicit_in = _initial_state(model)
+    explicit_out = model.state()
+    explicit = newton.solvers.SolverFeatherstone(model, angular_damping=0.0)
+    explicit.step(explicit_in, explicit_out, control, None, dt)
+
+    implicit_in = _initial_state(model)
+    implicit_out = model.state()
+    implicit = newton.solvers.SolverFeatherstone(
+        model,
+        angular_damping=0.0,
+        implicit_joint_limits=True,
+    )
+    implicit.step(implicit_in, implicit_out, control, None, dt)
+
+    np.testing.assert_array_equal(
+        explicit_out.joint_q.numpy(),
+        implicit_out.joint_q.numpy(),
+    )
+    np.testing.assert_array_equal(
+        explicit_out.joint_qd.numpy(),
+        implicit_out.joint_qd.numpy(),
+    )
+
 
 devices = get_test_devices()
 add_function_test(
@@ -142,6 +177,12 @@ add_function_test(
     TestFeatherstoneImplicitJointLimits,
     "test_implicit_limit_stabilizes_low_inertia_hinge",
     test_implicit_limit_stabilizes_low_inertia_hinge,
+    devices=devices,
+)
+add_function_test(
+    TestFeatherstoneImplicitJointLimits,
+    "test_inactive_limits_match_existing_path",
+    test_inactive_limits_match_existing_path,
     devices=devices,
 )
 
