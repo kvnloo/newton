@@ -13,6 +13,7 @@ from ...math import (
     velocity_at_point,
 )
 from ...sim import BodyFlags, JointType, Model
+from ...sim.articulation import joint_angle_reference
 from ...sim.contacts import contact_surface_point, contact_surface_separation
 from ...sim.joint_mimic import eval_joint_mimic_coordinate
 
@@ -1893,6 +1894,25 @@ def solve_body_joints(
         q_p = wp.transform_get_rotation(X_wp)
         q_c = wp.transform_get_rotation(X_wc)
 
+        # Swing-twist below returns a principal value in (-pi, pi]. A single rotational DOF whose
+        # limit range crosses +-pi is measured within pi of the range midpoint (or of the drive
+        # target when the range is at least 2*pi): rotate the child frame by -reference about the
+        # axis, decompose, then add the reference back. Adding 2*pi after the fact would leave the
+        # analytic gradient on the wrong branch.
+        ang_ref = wp.vec3(0.0)
+        if ang_axis_count == 1:
+            ref_idx = axis_start + lin_axis_count
+            ref_lower = joint_limit_lower[ref_idx]
+            ref_upper = joint_limit_upper[ref_idx]
+            ref = joint_angle_reference(ref_lower, ref_upper)
+            if not (ref_upper >= ref_lower and ref_upper - ref_lower < 2.0 * wp.pi):
+                if joint_target_ke[ref_idx] > 0.0:
+                    ref = joint_target_q[target_axis_start + lin_axis_count]
+            if ref != 0.0:
+                ref_axis = wp.normalize(joint_axis[ref_idx])
+                q_c = q_c * wp.quat_from_axis_angle(ref_axis, -ref)
+                ang_ref = ref_axis * ref
+
         # make quats lie in same hemisphere
         if wp.dot(q_p, q_c) < 0.0:
             q_c *= -1.0
@@ -1945,7 +1965,7 @@ def solve_body_joints(
             grad_1 *= scale
             grad_2 *= scale
 
-        errs = wp.vec3(err_0, err_1, err_2)
+        errs = wp.vec3(err_0, err_1, err_2) + ang_ref
         grad_x = wp.vec3(grad_0[0], grad_1[0], grad_2[0])
         grad_y = wp.vec3(grad_0[1], grad_1[1], grad_2[1])
         grad_z = wp.vec3(grad_0[2], grad_1[2], grad_2[2])
