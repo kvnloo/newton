@@ -63,7 +63,12 @@ def _prefer_elementwise_dense_gemm(
     articulation_count: int,
     max_output_elements: int,
 ) -> bool:
-    """Select element-parallel GEMM only where the measured GPU crossover is clear."""
+    """Select element-parallel GEMM only where the measured GPU crossover is clear.
+
+    The RTX 3080 Ti sweep in downstream PR #18 found serial wins only for the
+    smallest output matrices. Keep the boundary conservative until the same
+    integrated benchmark is collected on additional GPU architectures.
+    """
     if not is_cuda:
         return False
     if max_output_elements <= 4:
