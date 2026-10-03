@@ -1423,8 +1423,19 @@ class ArticulationView:
 
         if not is_array(values) or values.dtype != attrib.dtype:
             values = wp.array(values, dtype=attrib.dtype, shape=attrib.shape, device=self.device, copy=False)
-        assert values.shape == attrib.shape
-        assert values.dtype == attrib.dtype
+
+        if values.shape != attrib.shape:
+            raise ValueError(
+                f"Expected values shape {attrib.shape} for attribute '{name}', got {values.shape}"
+            )
+        if values.dtype != attrib.dtype:
+            raise TypeError(
+                f"Expected values dtype {attrib.dtype} for attribute '{name}', got {values.dtype}"
+            )
+        if values.device != attrib.device:
+            raise ValueError(
+                f"Expected values on device {attrib.device} for attribute '{name}', got {values.device}"
+            )
 
         # early out for in-place modifications
         if isinstance(attrib, wp.array) and isinstance(values, wp.array):
