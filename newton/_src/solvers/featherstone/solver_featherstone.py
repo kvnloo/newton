@@ -27,6 +27,7 @@ from ..solver import SolverBase
 from . import kernels
 from .kernels import (
     accumulate_free_distance_joint_f_to_body_force,
+    apply_implicit_joint_limit_terms,
     compute_body_parent_f,
     compute_com_transforms,
     compute_spatial_inertia,
@@ -145,6 +146,7 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
         friction_smoothing: float = 1.0,
         use_tile_gemm: bool = False,
         fuse_cholesky: bool = True,
+        implicit_joint_limits: bool = False,
         deterministic: wp.DeterministicMode | None = None,
     ):
         """
@@ -155,6 +157,7 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
             friction_smoothing: The delta value for the Huber norm (see :func:`warp.norm_huber() <warp._src.lang.norm_huber>`) used for the friction velocity normalization. Defaults to 1.0.
             use_tile_gemm: Whether to use operators from Warp's Tile API to solve for joint accelerations. Defaults to False.
             fuse_cholesky: Whether to fuse the Cholesky decomposition into the inertia matrix evaluation kernel when using the Tile API. Only used if `use_tile_gemm` is true. Defaults to True.
+            implicit_joint_limits: Experimental opt-in that treats active PRISMATIC, REVOLUTE, and D6 joint-limit springs semi-implicitly in the joint-space solve. Defaults to False.
             deterministic: Opt-in determinism for this solver's atomic-emitting
                 kernel modules. Pass a :class:`warp.DeterministicMode`, or
                 ``None`` (default) to inherit the current
@@ -189,6 +192,11 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
         self.friction_smoothing = friction_smoothing
         self.use_tile_gemm = use_tile_gemm
         self.fuse_cholesky = fuse_cholesky
+        self.implicit_joint_limits = implicit_joint_limits
+        if self.implicit_joint_limits and self.use_tile_gemm:
+            raise NotImplementedError("implicit_joint_limits does not yet support use_tile_gemm")
+        if self.implicit_joint_limits and self._has_joint_mimics:
+            raise NotImplementedError("implicit_joint_limits does not yet support joint mimics")
 
         self._step = 0
         self._mass_matrix_dirty = False
@@ -379,6 +387,12 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
             else:
                 self.H_mimic = None
                 self.joint_armature_zero = None
+
+            self.joint_armature_limit_solve = (
+                wp.empty_like(model.joint_armature, requires_grad=model.requires_grad)
+                if self.implicit_joint_limits
+                else None
+            )
 
         if model.body_count:
             self.body_I_m = wp.empty(
@@ -766,6 +780,31 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                         device=model.device,
                     )
 
+                    if self.implicit_joint_limits:
+                        wp.launch(
+                            apply_implicit_joint_limit_terms,
+                            dim=model.joint_count,
+                            inputs=[
+                                model.joint_type,
+                                model.joint_q_start,
+                                model.joint_qd_start,
+                                model.joint_dof_dim,
+                                state_in.joint_q,
+                                state_aug.joint_qd_internal_in,
+                                model.joint_limit_lower,
+                                model.joint_limit_upper,
+                                model.joint_limit_ke,
+                                model.joint_limit_kd,
+                                self.joint_armature_effective,
+                                dt,
+                            ],
+                            outputs=[
+                                state_aug.joint_tau,
+                                self.joint_armature_limit_solve,
+                            ],
+                            device=model.device,
+                        )
+
                     # Optionally populate ``state_out.body_parent_f`` (incoming
                     # joint wrench per body in world frame at COM) from the
                     # RNEA backward-pass spatial forces. Only runs when the
@@ -909,7 +948,9 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                                 device=model.device,
                             )
 
-                        if not (self.use_tile_gemm and self.fuse_cholesky and not self._has_joint_mimics):
+                        if not self.implicit_joint_limits and not (
+                            self.use_tile_gemm and self.fuse_cholesky and not self._has_joint_mimics
+                        ):
                             solve_H = self.H
                             solve_armature = self.joint_armature_effective
                             if self._has_joint_mimics:
@@ -959,6 +1000,21 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                         # print("L:")
                         # print(self.L.numpy())
                         self._mass_matrix_dirty = False
+
+                    if self.implicit_joint_limits:
+                        wp.launch(
+                            eval_dense_cholesky_batched,
+                            dim=model.articulation_count,
+                            inputs=[
+                                self.articulation_H_start,
+                                self.articulation_H_rows,
+                                self.articulation_dof_start,
+                                self.H,
+                                self.joint_armature_limit_solve,
+                            ],
+                            outputs=[self.L],
+                            device=model.device,
+                        )
 
                     # solve for qdd
                     state_aug.joint_qdd.zero_()
