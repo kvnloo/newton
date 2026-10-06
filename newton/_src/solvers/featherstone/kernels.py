@@ -1804,6 +1804,45 @@ def eval_dense_gemm_batched(
     )
 
 
+@wp.kernel
+def eval_dense_gemm_batched_elementwise(
+    m: wp.array[int],
+    n: wp.array[int],
+    p: wp.array[int],
+    transpose_A: bool,
+    transpose_B: bool,
+    A_start: wp.array[int],
+    B_start: wp.array[int],
+    C_start: wp.array[int],
+    A: wp.array[float],
+    B: wp.array[float],
+    C: wp.array[float],
+):
+    """Evaluate batched dense GEMM with one thread per output element."""
+    batch, elem = wp.tid()
+    mm = m[batch]
+    nn = n[batch]
+    pp = p[batch]
+    if elem >= mm * nn:
+        return
+
+    i = elem // nn
+    j = elem - i * nn
+    total = float(0.0)
+    for k in range(pp):
+        if transpose_A:
+            a_i = k * mm + i
+        else:
+            a_i = i * pp + k
+        if transpose_B:
+            b_j = j * pp + k
+        else:
+            b_j = k * nn + j
+        total += A[A_start[batch] + a_i] * B[B_start[batch] + b_j]
+
+    C[C_start[batch] + i * nn + j] = total
+
+
 @wp.func
 def dense_cholesky(
     n: int,
