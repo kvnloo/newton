@@ -1120,6 +1120,198 @@ def apply_joint_forces(
 
 
 @wp.func
+def _axis_drive_wrench(
+    q: float,
+    qd: float,
+    target_q: float,
+    target_qd: float,
+    ke: float,
+    kd: float,
+    effort: float,
+    inv_mass: float,
+    dt: float,
+) -> float:
+    """Scalar PD wrench. Damping is implicit; the spring term is not scaled.
+
+    At rest ``qd == 0``, so the wrench is ``ke * (target_q - q)`` independent
+    of ``dt`` and of how many projection iterations follow. ``effort`` clamps
+    the result in force or torque units.
+    """
+    if ke <= 0.0:
+        return 0.0
+    damp = kd * (qd - target_qd)
+    if kd > 0.0 and inv_mass > 0.0:
+        damp = damp / (1.0 + kd * dt * inv_mass)
+    tau = ke * (target_q - q) - damp
+    return wp.clamp(tau, -effort, effort)
+
+
+@wp.kernel
+def apply_joint_drive_forces(
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    body_inv_I: wp.array[wp.mat33],
+    body_inv_m: wp.array[float],
+    joint_type: wp.array[int],
+    joint_enabled: wp.array[bool],
+    joint_parent: wp.array[int],
+    joint_child: wp.array[int],
+    joint_X_p: wp.array[wp.transform],
+    joint_X_c: wp.array[wp.transform],
+    joint_qd_start: wp.array[int],
+    joint_target_q_start: wp.array[int],
+    joint_dof_dim: wp.array2d[int],
+    joint_axis: wp.array[wp.vec3],
+    joint_target_q: wp.array[float],
+    joint_target_qd: wp.array[float],
+    joint_target_ke: wp.array[float],
+    joint_target_kd: wp.array[float],
+    joint_effort_limit: wp.array[float],
+    dt: float,
+    body_f: wp.array[wp.spatial_vector],
+    joint_impulse: wp.array[wp.spatial_vector],
+):
+    """Apply position-drive wrenches once per step on the joint coordinate.
+
+    Revolute, prismatic, and single-angular D6 drives use the same coordinate
+    as :func:`newton.eval_ik`. The wrench is a body force, so it is not
+    re-applied on later XPBD iterations.
+    """
+    tid = wp.tid()
+    if not joint_enabled[tid]:
+        return
+    type = joint_type[tid]
+    if type != JointType.REVOLUTE and type != JointType.PRISMATIC and type != JointType.D6:
+        return
+
+    id_c = joint_child[tid]
+    id_p = joint_parent[tid]
+    X_wp = joint_X_p[tid]
+    pose_p = X_wp
+    com_p = wp.vec3(0.0)
+    vel_p = wp.vec3(0.0)
+    omega_p = wp.vec3(0.0)
+    inv_I_p = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    inv_m_p = 0.0
+    if id_p >= 0:
+        pose_p = body_q[id_p]
+        X_wp = pose_p * X_wp
+        com_p = body_com[id_p]
+        vel_p = wp.spatial_top(body_qd[id_p])
+        omega_p = wp.spatial_bottom(body_qd[id_p])
+        inv_I_p = body_inv_I[id_p]
+        inv_m_p = body_inv_m[id_p]
+
+    pose_c = body_q[id_c]
+    X_wc = pose_c * joint_X_c[tid]
+    com_c = body_com[id_c]
+    vel_c = wp.spatial_top(body_qd[id_c])
+    omega_c = wp.spatial_bottom(body_qd[id_c])
+    inv_I_c = body_inv_I[id_c]
+    inv_m_c = body_inv_m[id_c]
+
+    qd_start = joint_qd_start[tid]
+    q_start = joint_target_q_start[tid]
+    lin_axis_count = joint_dof_dim[tid, 0]
+    ang_axis_count = joint_dof_dim[tid, 1]
+
+    x_p = wp.transform_get_translation(X_wp)
+    x_c = wp.transform_get_translation(X_wc)
+    r_p = x_p - wp.transform_point(pose_p, com_p)
+    r_c = x_c - wp.transform_point(pose_c, com_c)
+    q_p = wp.transform_get_rotation(X_wp)
+    q_c = wp.transform_get_rotation(X_wc)
+
+    f_total = wp.vec3(0.0)
+    t_total = wp.vec3(0.0)
+
+    if lin_axis_count > 0 and (type == JointType.PRISMATIC or type == JointType.D6):
+        x_err = x_c - x_p
+        v_err = vel_c - vel_p
+        if lin_axis_count > 0:
+            axis = joint_axis[qd_start]
+            axis_w = wp.quat_rotate(q_p, axis)
+            n_body_c = wp.quat_rotate_inv(wp.transform_get_rotation(pose_c), axis_w)
+            n_body_p = wp.quat_rotate_inv(wp.transform_get_rotation(pose_p), axis_w)
+            inv_m = inv_m_c + inv_m_p
+            inv_m += wp.dot(n_body_c, inv_I_c * n_body_c)
+            inv_m += wp.dot(n_body_p, inv_I_p * n_body_p)
+            force = _axis_drive_wrench(
+                wp.dot(x_err, axis_w),
+                wp.dot(v_err, axis_w),
+                joint_target_q[q_start],
+                joint_target_qd[qd_start],
+                joint_target_ke[qd_start],
+                joint_target_kd[qd_start],
+                joint_effort_limit[qd_start],
+                inv_m,
+                dt,
+            )
+            f_total += force * axis_w
+        if lin_axis_count > 1:
+            axis = joint_axis[qd_start + 1]
+            axis_w = wp.quat_rotate(q_p, axis)
+            force = _axis_drive_wrench(
+                wp.dot(x_err, axis_w),
+                wp.dot(v_err, axis_w),
+                joint_target_q[q_start + 1],
+                joint_target_qd[qd_start + 1],
+                joint_target_ke[qd_start + 1],
+                joint_target_kd[qd_start + 1],
+                joint_effort_limit[qd_start + 1],
+                inv_m_c + inv_m_p,
+                dt,
+            )
+            f_total += force * axis_w
+        if lin_axis_count > 2:
+            axis = joint_axis[qd_start + 2]
+            axis_w = wp.quat_rotate(q_p, axis)
+            force = _axis_drive_wrench(
+                wp.dot(x_err, axis_w),
+                wp.dot(v_err, axis_w),
+                joint_target_q[q_start + 2],
+                joint_target_qd[qd_start + 2],
+                joint_target_ke[qd_start + 2],
+                joint_target_kd[qd_start + 2],
+                joint_effort_limit[qd_start + 2],
+                inv_m_c + inv_m_p,
+                dt,
+            )
+            f_total += force * axis_w
+
+    if ang_axis_count == 1 and (type == JointType.REVOLUTE or type == JointType.D6):
+        axis_i = qd_start + lin_axis_count
+        axis = joint_axis[axis_i]
+        q_pc = wp.quat_inverse(q_p) * q_c
+        axis_w = wp.quat_rotate(q_p, axis)
+        q = wp.quat_twist_angle_signed(axis, q_pc)
+        qd = wp.dot(omega_c - omega_p, axis_w)
+        n_c = wp.quat_rotate_inv(wp.transform_get_rotation(pose_c), axis_w)
+        n_p = wp.quat_rotate_inv(wp.transform_get_rotation(pose_p), axis_w)
+        inv_I = wp.dot(n_c, inv_I_c * n_c) + wp.dot(n_p, inv_I_p * n_p)
+        tau = _axis_drive_wrench(
+            q,
+            qd,
+            joint_target_q[q_start + lin_axis_count],
+            joint_target_qd[axis_i],
+            joint_target_ke[axis_i],
+            joint_target_kd[axis_i],
+            joint_effort_limit[axis_i],
+            inv_I,
+            dt,
+        )
+        t_total += tau * axis_w
+
+    child_wrench = wp.spatial_vector(f_total, t_total + wp.cross(r_c, f_total))
+    if id_p >= 0:
+        wp.atomic_sub(body_f, id_p, wp.spatial_vector(f_total, t_total + wp.cross(r_p, f_total)))
+    wp.atomic_add(body_f, id_c, child_wrench)
+    if joint_impulse:
+        wp.atomic_add(joint_impulse, tid, child_wrench * dt)
+
+
+@wp.func
 def update_joint_axis_limits(axis: wp.vec3, limit_lower: float, limit_upper: float, input_limits: wp.spatial_vector):
     # update the 3D linear/angular limits (spatial_vector [lower, upper]) given the axis vector and limits
     lo_temp = axis * limit_lower
@@ -1853,9 +2045,11 @@ def solve_body_joints(
                 target_pos = wp.clamp(target_pos, lower, upper)
 
                 if axis_stiffness[dim] > 0.0:
-                    err = e - target_pos
-                    compliance = 1.0 / axis_stiffness[dim]
-                    damping = axis_damping[dim]
+                    # Applied once per step in ``apply_joint_drive_forces``.
+                    # Leaving it in this loop multiplies the wrench by the
+                    # iteration count because lambda is not accumulated.
+                    err = 0.0
+                    derr_rel = 0.0
                 elif axis_damping[dim] > 0.0:
                     compliance = 1.0 / axis_damping[dim]
                     damping = axis_damping[dim]
@@ -2056,7 +2250,13 @@ def solve_body_joints(
                 target_pos = axis_target_pos[dim]
                 target_pos = wp.clamp(target_pos, lower, upper)
 
-                if axis_stiffness[dim] > 0.0:
+                if axis_stiffness[dim] > 0.0 and ang_axis_count <= 1:
+                    # Single-axis hinges are driven by ``apply_joint_drive_forces``
+                    # on the reconstructed joint coordinate. Multi-axis angular
+                    # drives stay on the compliance row below.
+                    err = 0.0
+                    derr_rel = 0.0
+                elif axis_stiffness[dim] > 0.0:
                     err = e - target_pos
                     compliance = 1.0 / axis_stiffness[dim]
                     damping = axis_damping[dim]
