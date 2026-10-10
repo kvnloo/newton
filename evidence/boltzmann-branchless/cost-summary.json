@@ -1,0 +1,48 @@
+{
+  "variants": {
+    "original": {
+      "forward": {
+        "original": 0.4751065,
+        "revised": 0.47547700000000004,
+        "revised_over_original": 1.0007798251549918
+      },
+      "backward_and_zero": {
+        "original": 1.3219085000000002,
+        "revised": 1.32401425,
+        "revised_over_original": 1.0015929619939654
+      }
+    },
+    "stable": {
+      "forward": {
+        "original": 0.4806885,
+        "revised": 0.98142225,
+        "revised_over_original": 2.041701122452482
+      },
+      "backward_and_zero": {
+        "original": 1.321298375,
+        "revised": 1.743547375,
+        "revised_over_original": 1.3195712701909588
+      }
+    },
+    "candidate": {
+      "forward": {
+        "original": 0.479465125,
+        "revised": 0.554942625,
+        "revised_over_original": 1.1574202086126704
+      },
+      "backward_and_zero": {
+        "original": 1.3269575,
+        "revised": 1.4887475000000001,
+        "revised_over_original": 1.1219255326564717
+      }
+    }
+  },
+  "candidate_over_stable_absolute_median": {
+    "forward": 0.5654473647810614,
+    "backward_and_zero": 0.8538612264550599
+  },
+  "candidate_over_stable_normalized_ratio": {
+    "forward": 0.5668901270046727,
+    "backward_and_zero": 0.850219732727369
+  }
+}

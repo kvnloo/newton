@@ -1,0 +1,22 @@
+{
+  "kind": "Path-normalized publication copies; untouched original reports retained separately",
+  "normalization": "Only replace absolute source/traceback directory prefixes with descriptive worktree or evidence placeholders. All test inputs, numerical results, classifications, hashes and outcomes remain untouched.",
+  "suite_sha256": "3ac0a2105dd3ef045e11516b0829e155c7bc4b39a97b862c3d14ec8f1c2c9327",
+  "records": {
+    "original": {
+      "original_sha256": "afec9116e6456c9ebf1ce254a82da53e1613cb398c973726e2e78f0bb08312f1",
+      "normalized_sha256": "1a06dcf0ed4c0e8d8a267f9f660a46c7828f667a13228039d70ddc1ad949fd1e",
+      "normalized_filename": "newton-original-counterexamples.normalized.json"
+    },
+    "stable": {
+      "original_sha256": "cbc70b44b637f653b919da729f067f54522ae3cfffc0268cb8bee28910669c2e",
+      "normalized_sha256": "1b91961275915623b423695aa84c37ed2adc762ddfb4d6b0c8c793b341768a93",
+      "normalized_filename": "newton-stable-counterexamples.normalized.json"
+    },
+    "candidate": {
+      "original_sha256": "4fe803ed7c41ae918044e7d24cd8acae27abc464f10385af325feecbb25b15c0",
+      "normalized_sha256": "77d8b71be5db674ae4e40f1aff7cec7a17a97e89406d4e13603cdb7fa609fff5",
+      "normalized_filename": "newton-candidate-counterexamples.normalized.json"
+    }
+  }
+}

@@ -39,14 +39,10 @@ def boltzmann(a: float, b: float, alpha: float):
     difference = a64 - b64
     scaled_difference = wp.float64(alpha) * difference
 
-    if scaled_difference >= wp.float64(0.0):
-        ratio = wp.exp(-scaled_difference)
-        weight = ratio / (wp.float64(1.0) + ratio)
-        return float(a64 - difference * weight)
-
-    ratio = wp.exp(scaled_difference)
+    ratio = wp.exp(-wp.abs(scaled_difference))
     weight = ratio / (wp.float64(1.0) + ratio)
-    return float(b64 + difference * weight)
+    correction = difference * weight
+    return float(wp.where(scaled_difference >= wp.float64(0.0), a64 - correction, b64 + correction))
 
 
 @wp.func
