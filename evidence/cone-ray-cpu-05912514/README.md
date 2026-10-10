@@ -1,0 +1,37 @@
+# Newton cone-ray correction: portable CPU evidence
+
+**Source branch:** [`kvnloo/newton:fix/cone-ray-inside-exits-f64`](https://github.com/kvnloo/newton/tree/fix/cone-ray-inside-exits-f64), commit [`059125141e71f1e72e294c047fffd06ca4b32d3e`](https://github.com/kvnloo/newton/commit/059125141e71f1e72e294c047fffd06ca4b32d3e). The commit's parent is upstream `a6e1649b112e3d962b35f7dad66780dc55150588`; its **candidate tree** is `a5ac846be242395a71da9fc1196ec5715b2c0553`. The changed raycast source blob is `e89355f09680d1df57de32fd583fc4a58720f475`; repository-test blob `1f3f73f908869338abd541d84c9ac7059f3148c3`; bugfix fragment blob `15e8919d7b6f8f6d30724f3ddbabada94909f9dd`.
+
+## Finding and credit
+
+A ray beginning inside a unit Newton cone at its center and traveling along +X should exit the side at distance 0.5 with an outward normal. Upstream's public `intersect_ray` reports a miss because the cone helper selects a negative side root and the public wrapper rejects it. An inside-origin downward ray also needs the base exit. Existing sphere, box, ellipsoid, and barrel-cylinder ray tests accept interior exits; Newton's cone had only exterior coverage. The authored reproducers and this proposed fix are by dot, an OpenAI AI assistant. The original cone ray code was contributed by **nvtw** in [Newton PR #648](https://github.com/newton-physics/newton/pull/648). **StafaH** later refactored the coordinate plumbing in [PR #3521](https://github.com/newton-physics/newton/pull/3521), which **eric-heiden** reviewed on other semantics. These people are credited for provenance; the bug is not attributed to them. Scoped public issue, PR, and fork-branch searches found no existing owner of this exact correction before branch publication.
+
+## RED to GREEN
+
+- The independent, pre-fix frozen analytic oracle has **91 failures in 155 CPU checks** on upstream (`receipts/upstream-red.*`). It covers 27 strong core and four weaker boundary witnesses through the helper and public BVH with fast math on/off and a rigidly transformed model. The original reproducers and a six-failure focused repository RED, run with baseline cone code plus new regression tests, are in `receipts/cone_*_red.log` and `receipts/repo-red.log`.
+- The final source passes **155/155 frozen checks** (`receipts/candidate2-frozen-final.*`), **768/768 independent Decimal-oracle checks** over exact submitted float32 inputs including near-generator azimuths and ordinary controls (`receipts/generalized-candidate2.*`), and **9/9 solver-valid strict near-generator checks** (`receipts/near-generator-candidate2.*`). These are **932 executed independent-oracle CPU checks across three suites**; underlying witness geometry can overlap between suites.
+- Separately, Newton's full `newton.tests.test_raycast` module passes **19/19 CPU tests** (`receipts/raycast-full-final.log`), including public-BVH interior and helper regressions. The repository's `pre-commit run -a` passes all hooks, including Ruff, formatting, uv-lock, typos, and Warp syntax (`receipts/precommit-full.log`). A Towncrier draft renders without writing output (`receipts/towncrier-draft.log`). These gates are not included in the 932 independent-oracle count.
+
+The immutable frozen witness implementation is `oracle/cone_contract.py`, SHA-256 `70eea7f68c2c20edf5b5524e9c26ef23c25f4d21a684c65223f1e8c36a95d871`, identical to its local raw source. `oracle/CONTRACT.md` has the same substantive contract, with its machine-specific execution recipe replaced by a portable one; its original SHA-256 is `560e15f011b292ec069a6c110a4bea38d06c94ab4592ea568a12ad798678fa60`. `oracle/generalized_probe.py` independently derives expected hits using Decimal geometry from actual float32 inputs. All test/probe Python sources are byte-identical to their originals. `MANIFEST.json` records raw and sanitized SHA-256 values for every copied artifact.
+
+For replay, check out the linked Newton source at exact commit `059125141e71f1e72e294c047fffd06ca4b32d3e` as `SOURCE`, and use a Python runtime with the checkout's dependencies and official `warp-lang==1.18.0` (the CPU Warp version shown in the receipts). From this packet directory, run:
+
+    PYTHONPATH="$SOURCE" python oracle/cone_contract.py --json-output frozen.json
+    PYTHONPATH="$SOURCE" python oracle/generalized_probe.py generalized.json
+    PYTHONPATH="$SOURCE" python oracle/near_generator_probe.py --json-output near-generator.json
+
+The generalized oracle takes a positional output filename, while the frozen and near-generator probes take `--json-output`. The near-generator command exits 1 after recording **9/15** checks because it retains six transformed expectations superseded by the mapped-input representability finding below. The near-generator log's inherited “Expected values were frozen” banner comes from the `cone_contract.py` runner, not from its three diagnostic witnesses, which were added after candidate inspection. Baseline RED instead uses upstream parent `a6e1649b112e3d962b35f7dad66780dc55150588`.
+
+## Rejected approaches and representability limit
+
+Candidate 1 treated near-zero side coefficients as an exact generator and created false zero-distance hits for strict interior and exterior points (`variants/candidate1.diff`, `receipts/near-generator-candidate1.*`). Its **six solver-valid** helper/identity checks failed; the raw log's **0/10** count also includes four transformed cases affected by the mapper limitation below. Candidate 3 used factored float32 coefficients; it passed the frozen 155 checks but only **612/768** generalized azimuth checks, producing real non-axis false hits and misses (`variants/candidate3.diff`, `receipts/generalized-candidate3.*`, `variants/candidate3-minimal-proof.txt`). Neither is proposed for production.
+
+The final strict diagnostic log has six raw transformed failures in addition to its nine passes. They are **excluded from the 932 solver-valid count** because the public world-to-local map rounds the six intended ±2⁻²²-offset world origins onto the same exact local surface coordinate before cone solving. `receipts/map-precision.log` records the submitted and mapped float32 bits. This is a transform-input representability erratum, not evidence that the cone helper can distinguish information it never receives. The frozen 155/155 transformed checks remain unchanged and pass.
+
+## Scope and hold
+
+The proposed source selects the nearest nonnegative finite-cone side or base hit, handles linear/generator cases, and conditionally recomputes ill-conditioned side coefficients in float64. It does not modify shared ray math or the world-to-local map. CPU correctness is bounded by these tests, not an exhaustive numerical proof. **GPU correctness, supported-device behavior, mixed-precision cost, and whole-raycast performance are unmeasured. Owner review is required before claiming upstream readiness.** No upstream PR or issue accompanies this packet.
+
+## Package integrity
+
+Only `README.md`, `MANIFEST.json`, `oracle/`, `probes/`, `variants/`, and `receipts/` are intended for this evidence tree. The copied receipts are sanitized for absolute and relative workspace paths, runtime/cache IDs, and unittest module prefixes while preserving results, numerical values, outcomes, and diagnostics. The Towncrier receipt is shortened to its execution header and cone fragment line. Local raw logs are not included. `MANIFEST.json` gives their raw and public hashes for audit; runtime timings shown in the logs are incidental and are not performance measurements.

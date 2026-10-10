@@ -1,0 +1,2024 @@
+{
+  "newton_file": "<candidate-checkout>/newton/__init__.py",
+  "warp_version": "1.18.0",
+  "cases": 31,
+  "checks": 155,
+  "failures": 0,
+  "records": [
+    {
+      "path": "helper",
+      "case": "interior_center_side_x",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_center_side_y",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.0,
+        -0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_offset_outward",
+      "tier": "core",
+      "expected": 0.3,
+      "actual": 0.29999998211860657,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_offset_inward",
+      "tier": "core",
+      "expected": 0.7,
+      "actual": 0.699999988079071,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_upper_slice",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_axis_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_offset_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_axis_apex",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "interior_offset_ascending",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "exterior_side_entry",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "exterior_base_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "exterior_base_before_side",
+      "tier": "core",
+      "expected": 1.25,
+      "actual": 1.25,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "exterior_apex_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "exterior_side_after_clipped_root",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "side_tangent",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "miss_offset",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "miss_both_roots_behind",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "miss_both_roots_axially_clipped",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "linear_interior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "linear_interior_base",
+      "tier": "core",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "linear_exterior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "linear_exterior_away",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "constant_nonzero_polynomial_miss",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "tall_cone_center_exit",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.9922779202461243,
+        0.0,
+        0.12403474003076553
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "squat_cone_center_exit",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.44721361994743347,
+        0.0,
+        0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "small_cone_center_exit",
+      "tier": "core",
+      "expected": 0.005,
+      "actual": 0.004999999888241291,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "large_cone_center_exit",
+      "tier": "core",
+      "expected": 5.0,
+      "actual": 5.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "boundary_side_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "boundary_base_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "generator_surface_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": 0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "generator_from_below",
+      "tier": "boundary",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_center_side_x",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_center_side_y",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.0,
+        -0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_offset_outward",
+      "tier": "core",
+      "expected": 0.3,
+      "actual": 0.29999998211860657,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_offset_inward",
+      "tier": "core",
+      "expected": 0.7,
+      "actual": 0.699999988079071,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_upper_slice",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_axis_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_offset_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_axis_apex",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "interior_offset_ascending",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "exterior_side_entry",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "exterior_base_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "exterior_base_before_side",
+      "tier": "core",
+      "expected": 1.25,
+      "actual": 1.25,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "exterior_apex_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "exterior_side_after_clipped_root",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "side_tangent",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "miss_offset",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "miss_both_roots_behind",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "miss_both_roots_axially_clipped",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "linear_interior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "linear_interior_base",
+      "tier": "core",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "linear_exterior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "linear_exterior_away",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "constant_nonzero_polynomial_miss",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "tall_cone_center_exit",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.9922779202461243,
+        0.0,
+        0.12403474003076553
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "squat_cone_center_exit",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.44721361994743347,
+        0.0,
+        0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "small_cone_center_exit",
+      "tier": "core",
+      "expected": 0.005,
+      "actual": 0.004999999888241291,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "large_cone_center_exit",
+      "tier": "core",
+      "expected": 5.0,
+      "actual": 5.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "boundary_side_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "boundary_base_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "generator_surface_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": 0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "generator_from_below",
+      "tier": "boundary",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_center_side_x",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_center_side_y",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.0,
+        -0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_offset_outward",
+      "tier": "core",
+      "expected": 0.3,
+      "actual": 0.29999998211860657,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_offset_inward",
+      "tier": "core",
+      "expected": 0.7,
+      "actual": 0.699999988079071,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_upper_slice",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_axis_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_offset_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_axis_apex",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "interior_offset_ascending",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "exterior_side_entry",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        -0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "exterior_base_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "exterior_base_before_side",
+      "tier": "core",
+      "expected": 1.25,
+      "actual": 1.25,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "exterior_apex_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "exterior_side_after_clipped_root",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "side_tangent",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.0,
+        0.8944272398948669,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "miss_offset",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "miss_both_roots_behind",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "miss_both_roots_axially_clipped",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "linear_interior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "linear_interior_base",
+      "tier": "core",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "linear_exterior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "linear_exterior_away",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "constant_nonzero_polynomial_miss",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "tall_cone_center_exit",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.9922779202461243,
+        0.0,
+        0.12403474003076553
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "squat_cone_center_exit",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.44721361994743347,
+        0.0,
+        0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "small_cone_center_exit",
+      "tier": "core",
+      "expected": 0.005,
+      "actual": 0.004999999888241291,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "large_cone_center_exit",
+      "tier": "core",
+      "expected": 5.0,
+      "actual": 5.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "boundary_side_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "boundary_base_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "generator_surface_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": 0.0,
+      "normal": [
+        0.8944272398948669,
+        0.0,
+        0.44721361994743347
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "generator_from_below",
+      "tier": "boundary",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_center_side_x",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_center_side_y",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.0,
+        -0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_offset_outward",
+      "tier": "core",
+      "expected": 0.3,
+      "actual": 0.3000001907348633,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_offset_inward",
+      "tier": "core",
+      "expected": 0.7,
+      "actual": 0.6999998092651367,
+      "normal": [
+        0.44721361994743347,
+        -0.8944272398948669,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_upper_slice",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_axis_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_offset_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_axis_apex",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "interior_offset_ascending",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "exterior_side_entry",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.44721361994743347,
+        -0.8944272398948669,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "exterior_base_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "exterior_base_before_side",
+      "tier": "core",
+      "expected": 1.25,
+      "actual": 1.2499998807907104,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "exterior_apex_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "exterior_side_after_clipped_root",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "side_tangent",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.44721361994743347,
+        -1.4901162970204496e-08,
+        0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "miss_offset",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "miss_both_roots_behind",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "miss_both_roots_axially_clipped",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "linear_interior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.4472135901451111,
+        0.8944271802902222,
+        -5.960463766996327e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "linear_interior_base",
+      "tier": "core",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "linear_exterior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "linear_exterior_away",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "constant_nonzero_polynomial_miss",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "tall_cone_center_exit",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.12403472512960434,
+        0.9922779202461243,
+        -2.980232594040899e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "squat_cone_center_exit",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.8944272398948669,
+        0.44721361994743347,
+        -1.4901162970204496e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "small_cone_center_exit",
+      "tier": "core",
+      "expected": 0.005,
+      "actual": 0.004999999888241291,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "large_cone_center_exit",
+      "tier": "core",
+      "expected": 5.0,
+      "actual": 5.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "boundary_side_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "boundary_base_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "generator_surface_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "generator_from_below",
+      "tier": "boundary",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_center_side_x",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_center_side_y",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.0,
+        -0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_offset_outward",
+      "tier": "core",
+      "expected": 0.3,
+      "actual": 0.3000001907348633,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_offset_inward",
+      "tier": "core",
+      "expected": 0.7,
+      "actual": 0.6999998092651367,
+      "normal": [
+        0.44721361994743347,
+        -0.8944272398948669,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_upper_slice",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_axis_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_offset_base",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_axis_apex",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "interior_offset_ascending",
+      "tier": "core",
+      "expected": 0.5,
+      "actual": 0.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "exterior_side_entry",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.44721361994743347,
+        -0.8944272398948669,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "exterior_base_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "exterior_base_before_side",
+      "tier": "core",
+      "expected": 1.25,
+      "actual": 1.2499998807907104,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "exterior_apex_entry",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "exterior_side_after_clipped_root",
+      "tier": "core",
+      "expected": 1.5,
+      "actual": 1.5,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "side_tangent",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.44721361994743347,
+        -1.4901162970204496e-08,
+        0.8944272398948669
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "miss_offset",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "miss_both_roots_behind",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "miss_both_roots_axially_clipped",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "linear_interior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.4472135901451111,
+        0.8944271802902222,
+        -5.960463766996327e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "linear_interior_base",
+      "tier": "core",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "linear_exterior_side",
+      "tier": "core",
+      "expected": 0.5590169943749475,
+      "actual": 0.55901700258255,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "linear_exterior_away",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "constant_nonzero_polynomial_miss",
+      "tier": "core",
+      "expected": -1.0,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "tall_cone_center_exit",
+      "tier": "core",
+      "expected": 0.25,
+      "actual": 0.25,
+      "normal": [
+        0.12403472512960434,
+        0.9922779202461243,
+        -2.980232594040899e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "squat_cone_center_exit",
+      "tier": "core",
+      "expected": 1.0,
+      "actual": 1.0,
+      "normal": [
+        0.8944272398948669,
+        0.44721361994743347,
+        -1.4901162970204496e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "small_cone_center_exit",
+      "tier": "core",
+      "expected": 0.005,
+      "actual": 0.004999999888241291,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "large_cone_center_exit",
+      "tier": "core",
+      "expected": 5.0,
+      "actual": 5.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "boundary_side_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "boundary_base_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": -0.0,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "generator_surface_origin",
+      "tier": "boundary",
+      "expected": 0.0,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "generator_from_below",
+      "tier": "boundary",
+      "expected": 1.118033988749895,
+      "actual": 1.1180340051651,
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    }
+  ]
+}

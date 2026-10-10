@@ -1,0 +1,38 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+test_convex_hull_ray_intersect_via_geom_cpu (TestRaycast.test_convex_hull_ray_intersect_via_geom_cpu) ... ok
+test_intersect_ray_cone_inside_cpu (TestRaycast.test_intersect_ray_cone_inside_cpu) ... ok
+test_intersect_ray_cpu (TestRaycast.test_intersect_ray_cpu) ... ok
+test_intersect_ray_global_world_cpu (TestRaycast.test_intersect_ray_global_world_cpu) ... ok
+test_intersect_ray_heightfield_uses_finalize_bvh_cpu (TestRaycast.test_intersect_ray_heightfield_uses_finalize_bvh_cpu) ... ok
+test_intersect_ray_includes_collision_shapes_on_request_cpu (TestRaycast.test_intersect_ray_includes_collision_shapes_on_request_cpu) ... ok
+test_mesh_ray_intersect_cpu (TestRaycast.test_mesh_ray_intersect_cpu) ... ok
+test_ray_intersect_barrel_cylinder_cpu (TestRaycast.test_ray_intersect_barrel_cylinder_cpu) ... ok
+test_ray_intersect_box_cpu (TestRaycast.test_ray_intersect_box_cpu) ... ok
+test_ray_intersect_capsule_cpu (TestRaycast.test_ray_intersect_capsule_cpu) ... ok
+test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) ... ok
+test_ray_intersect_cylinder_cpu (TestRaycast.test_ray_intersect_cylinder_cpu) ... ok
+test_ray_intersect_ellipsoid_cpu (TestRaycast.test_ray_intersect_ellipsoid_cpu) ... ok
+test_ray_intersect_heightfield_cpu (TestRaycast.test_ray_intersect_heightfield_cpu) ... ok
+test_ray_intersect_heightfield_normals_cpu (TestRaycast.test_ray_intersect_heightfield_normals_cpu) ... ok
+test_ray_intersect_heightfield_scaled_cpu (TestRaycast.test_ray_intersect_heightfield_scaled_cpu) ... ok
+test_ray_intersect_mesh_cpu (TestRaycast.test_ray_intersect_mesh_cpu) ... ok
+test_ray_intersect_plane_cpu (TestRaycast.test_ray_intersect_plane_cpu) ... ok
+test_ray_intersect_sphere_cpu (TestRaycast.test_ray_intersect_sphere_cpu) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.559s
+
+OK
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Module test_raycast <cache-id> load on device 'cpu' took 2.81 ms  (cached)
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 0.68 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.31 ms  (cached)
+Module validate_and_correct_inertia_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.29 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.27 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.34 ms  (cached)
+Module newton._src.geometry.raycast <cache-id> load on device 'cpu' took 3.85 ms  (cached)

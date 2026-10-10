@@ -1,0 +1,8 @@
+Using actual float32 inputs recorded in generalized-candidate3.json.
+For t in [0,1/dz], radial distance >= rho0 - t*radial_speed by the reverse triangle inequality.
+Subtract cone cross-section radius (1-t*dz)/2. The resulting affine lower bound is positive at both endpoints, proving no intersection anywhere in the finite forward height interval.
+Lower bound at t=0: 0.0000038210876794327082740865956371806820837451078752790969114817119635
+Lower bound at t=1/dz: 0.000003800857828229903132242429647625018210165385329012312850827255537768553
+Actual candidate t: 1.10835707187652587890625
+Actual candidate hit radial residual: 0.000003801032925309778595840573189953573235987969146723378812679509124863
+Input norm: 0.9999999961181389376436661074484781662930253816808463576446943671268347

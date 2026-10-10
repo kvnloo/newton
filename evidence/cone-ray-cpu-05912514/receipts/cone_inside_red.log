@@ -1,0 +1,14 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Module __main__ <cache-id> load on device 'cpu' took 3733.28 ms  (compiled)
+inside cone exit ray: -0.5 [0. 0. 0.]
+Traceback (most recent call last):
+  File "<evidence-workspace>/cone_inside_red.py", line 15, in <module>
+    assert abs(t_out.numpy()[0] - 0.5) < 1e-6
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

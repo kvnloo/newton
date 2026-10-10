@@ -1,0 +1,16 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Module validate_and_correct_inertia_kernel_<cache-id> <cache-id> load on device 'cpu' took 5024.09 ms  (compiled)
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 1399.81 ms  (compiled)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 1560.96 ms  (compiled)
+shape 0 distance [-1.] shape ID [-1] normal [[0. 0. 0.]]
+Traceback (most recent call last):
+  File "<evidence-workspace>/cone_public_red.py", line 20, in <module>
+    assert abs(float(out_dist.numpy()[0])-0.5)<1e-6
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -1,0 +1,72 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) ... 
+  test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_side] ... FAIL
+  test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_base] ... FAIL
+  test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_oblique] ... FAIL
+  test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [linear_side] ... FAIL
+  test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [side_behind] ... FAIL
+test_intersect_ray_cone_inside_cpu (TestRaycast.test_intersect_ray_cone_inside_cpu) ... FAIL
+
+======================================================================
+FAIL: test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_side]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/test_raycast.py", line 242, in test_ray_intersect_cone
+    test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+AssertionError: np.float32(-0.5) != 0.5 within 1e-05 delta (np.float32(1.0) difference)
+
+======================================================================
+FAIL: test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_base]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/test_raycast.py", line 242, in test_ray_intersect_cone
+    test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+AssertionError: np.float32(-1.0) != 1.0 within 1e-05 delta (np.float32(2.0) difference)
+
+======================================================================
+FAIL: test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [inside_oblique]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/test_raycast.py", line 242, in test_ray_intersect_cone
+    test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+AssertionError: np.float32(-1.0) != np.float64(0.6324555320336759) within 1e-05 delta (np.float64(1.632455532033676) difference)
+
+======================================================================
+FAIL: test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [linear_side]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/test_raycast.py", line 242, in test_ray_intersect_cone
+    test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+AssertionError: np.float32(-1.0) != np.float64(0.5590169943749475) within 1e-05 delta (np.float64(1.5590169943749475) difference)
+
+======================================================================
+FAIL: test_ray_intersect_cone_cpu (TestRaycast.test_ray_intersect_cone_cpu) [side_behind]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/test_raycast.py", line 242, in test_ray_intersect_cone
+    test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+AssertionError: np.float32(-2.5) != -1.0 within 1e-05 delta (np.float32(1.5) difference)
+
+======================================================================
+FAIL: test_intersect_ray_cone_inside_cpu (TestRaycast.test_intersect_ray_cone_inside_cpu)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-checkout>/newton/tests/unittest_utils.py", line 623, in test_func
+    func(self, device, **kwargs)
+  File "<test-checkout>/newton/tests/test_raycast.py", line 268, in test_intersect_ray_cone_inside
+    test.assertAlmostEqual(out_dist.numpy()[0], 0.5, delta=1e-5)
+AssertionError: np.float32(-1.0) != 0.5 within 1e-05 delta (np.float32(1.5) difference)
+
+----------------------------------------------------------------------
+Ran 2 tests in 6.972s
+
+FAILED (failures=6)
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Module test_raycast <cache-id> load on device 'cpu' took 5346.58 ms  (compiled)
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 0.55 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 954.30 ms  (compiled)

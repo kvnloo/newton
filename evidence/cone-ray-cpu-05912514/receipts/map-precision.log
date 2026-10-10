@@ -1,0 +1,31 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 2.98 ms  (cached)
+actual BVH transform [ 3.  -2.   5.   0.5  0.5  0.5  0.5]
+Module __main__ <cache-id> load on device 'cpu' took 0.37 ms  (cached)
+intended local origins [[0.49999976 0.         0.        ]
+ [0.50000024 0.         0.        ]
+ [0.49999976 0.         0.        ]]
+actual world origins [[ 3.        -1.5000002  5.       ]
+ [ 3.        -1.4999998  5.       ]
+ [ 3.        -1.5000002  5.       ]]
+mapped local origins [[0.5 0.  0. ]
+ [0.5 0.  0. ]
+ [0.5 0.  0. ]]
+intended local directions [[-0.4472136   0.          0.8944272 ]
+ [-0.4472136   0.          0.8944272 ]
+ [-0.44721377  0.          0.8944271 ]]
+actual mapped local directions [[-0.4472136   0.          0.8944272 ]
+ [-0.4472136   0.          0.8944272 ]
+ [-0.44721377  0.          0.8944272 ]]
+origin bits intended [[1056964600          0          0]
+ [1056964612          0          0]
+ [1056964600          0          0]]
+origin bits mapped [[1056964608          0          0]
+ [1056964608          0          0]
+ [1056964608          0          0]]

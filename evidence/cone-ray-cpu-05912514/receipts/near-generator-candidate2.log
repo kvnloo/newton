@@ -1,0 +1,29 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Newton: <candidate-checkout>/newton/__init__.py Warp: 1.18.0
+Expected values were frozen before any cone candidate was inspected.
+Module cone_contract <cache-id> load on device 'cpu' took 2.43 ms  (cached)
+PASS helper near_generator_nonzero_quadratic_interior: expected=1.11803355 actual=1.11803353 normal=[0. 0. 1.]
+PASS helper near_generator_strict_interior: expected=1.11803374 actual=1.11803377 normal=[0. 0. 1.]
+PASS helper near_generator_strict_exterior_miss: expected=-1 actual=-1 normal=[0. 0. 0.]
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 0.57 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.29 ms  (cached)
+PASS public_transformed=False_fast_math=False near_generator_nonzero_quadratic_interior: expected=1.11803355 actual=1.11803353 normal=[0. 0. 1.]
+PASS public_transformed=False_fast_math=False near_generator_strict_interior: expected=1.11803374 actual=1.11803377 normal=[0. 0. 1.]
+PASS public_transformed=False_fast_math=False near_generator_strict_exterior_miss: expected=-1 actual=-1 normal=[0. 0. 0.]
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.25 ms  (cached)
+PASS public_transformed=False_fast_math=True near_generator_nonzero_quadratic_interior: expected=1.11803355 actual=1.11803353 normal=[0. 0. 1.]
+PASS public_transformed=False_fast_math=True near_generator_strict_interior: expected=1.11803374 actual=1.11803377 normal=[0. 0. 1.]
+PASS public_transformed=False_fast_math=True near_generator_strict_exterior_miss: expected=-1 actual=-1 normal=[0. 0. 0.]
+FAIL public_transformed=True_fast_math=False near_generator_nonzero_quadratic_interior: expected=1.11803355 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+FAIL public_transformed=True_fast_math=False near_generator_strict_interior: expected=1.11803374 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+FAIL public_transformed=True_fast_math=False near_generator_strict_exterior_miss: expected=-1 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+FAIL public_transformed=True_fast_math=True near_generator_nonzero_quadratic_interior: expected=1.11803355 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+FAIL public_transformed=True_fast_math=True near_generator_strict_interior: expected=1.11803374 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+FAIL public_transformed=True_fast_math=True near_generator_strict_exterior_miss: expected=-1 actual=0 normal=[ 4.4721359e-01  8.9442724e-01 -2.9802322e-08]
+SUMMARY: 9/15 checks passed; 6 failed

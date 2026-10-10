@@ -1,0 +1,232 @@
+diff --git a/newton/_src/geometry/raycast.py b/newton/_src/geometry/raycast.py
+index 09b7393..14d01ef 100644
+--- a/newton/_src/geometry/raycast.py
++++ b/newton/_src/geometry/raycast.py
+@@ -526,50 +526,83 @@ def ray_intersect_cone(
+     if radius <= 0.0:
+         return t_hit, normal
+ 
+-    # pa = tip (cone extremes), pb = base center, ra = 0 (tip radius), rb = radius (base radius)
+     # Check conventions.rst, section "Newton Collision Primitives"
+-    pa = wp.vec3(0.0, 0.0, half_height)  # tip at +half_height
+-    pb = wp.vec3(0.0, 0.0, -half_height)  # base center at -half_height
+-    ra = 0.0  # radius at tip
+-    rb = radius  # radius at base
+-
+-    ba = pb - pa
+-    oa = ray_origin - pa
+-    ob = ray_origin - pb
+-    m0 = wp.dot(ba, ba)
+-    m1 = wp.dot(oa, ba)
+-    m2 = wp.dot(ray_direction, ba)
+-    m3 = wp.dot(ray_direction, oa)
+-    m5 = wp.dot(oa, oa)
+-    m9 = wp.dot(ob, ba)
+-
+-    # caps
+-    if m1 < 0.0:
+-        temp = oa * m2 - ray_direction * m1
+-        if wp.dot(temp, temp) < (ra * ra * m2 * m2):
+-            if wp.abs(m2) > MINVAL:
+-                t_hit = -m1 / m2
+-    elif m9 > 0.0:
+-        if wp.abs(m2) > MINVAL:
+-            t = -m9 / m2
+-            temp_ob = ob + ray_direction * t
+-            if wp.dot(temp_ob, temp_ob) < (rb * rb):
+-                t_hit = t
++    # The base must be considered even when the ray starts between the base
++    # and tip: in that case it may be the first exit from the closed cone.
++    if wp.abs(ray_direction[2]) > MINVAL:
++        t_base = (-half_height - ray_origin[2]) / ray_direction[2]
++        if t_base >= 0.0:
++            x_base = ray_origin[0] + t_base * ray_direction[0]
++            y_base = ray_origin[1] + t_base * ray_direction[1]
++            if x_base * x_base + y_base * y_base <= radius * radius:
++                t_hit = t_base
++
++    # On the side, x(t)^2 + y(t)^2 = slope^2 * (half_height - z(t))^2.
++    # Check both roots against the finite cone and the forward ray. The sign
++    # of the quadratic coefficient can change, so neither algebraic root is
++    # always the nearer hit.
++    slope = radius / (2.0 * half_height)
++    slope_sq = slope * slope
++    dz_to_tip = half_height - ray_origin[2]
++    radial_dir_sq = ray_direction[0] * ray_direction[0] + ray_direction[1] * ray_direction[1]
++    axial_dir_sq = slope_sq * ray_direction[2] * ray_direction[2]
++    a = radial_dir_sq - axial_dir_sq
++    radial_cross = ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1]
++    axial_cross = slope_sq * dz_to_tip * ray_direction[2]
++    b = 2.0 * (radial_cross + axial_cross)
++    radial_origin_sq = ray_origin[0] * ray_origin[0] + ray_origin[1] * ray_origin[1]
++    axial_origin_sq = slope_sq * dz_to_tip * dz_to_tip
++    c = radial_origin_sq - axial_origin_sq
++
++    # Near a generator, subtracting nearly equal squares erases small but
++    # meaningful coefficients in float32. Factor those differences instead.
++    if wp.abs(a) <= 1.0e-6 * (radial_dir_sq + axial_dir_sq):
++        radial_dir = wp.sqrt(radial_dir_sq)
++        axial_dir = wp.abs(slope * ray_direction[2])
++        a = (radial_dir - axial_dir) * (radial_dir + axial_dir)
++        radial_origin = wp.sqrt(radial_origin_sq)
++        side_radius = slope * dz_to_tip
++        radial_gap = radial_origin - side_radius
++        c = radial_gap * (radial_origin + side_radius)
++        if radial_origin > 0.0:
++            radial_velocity = radial_cross / radial_origin
++            b = 2.0 * (radial_gap * radial_velocity + side_radius * (radial_velocity + slope * ray_direction[2]))
++        else:
++            b = 2.0 * side_radius * slope * ray_direction[2]
+ 
+-    if t_hit < 0.0:
+-        # body
+-        rr = ra - rb
+-        hy = m0 + rr * rr
+-        k2 = m0 * m0 - m2 * m2 * hy
+-        k1 = m0 * m0 * m3 - m1 * m2 * hy + m0 * ra * (rr * m2 * 1.0)
+-        k0 = m0 * m0 * m5 - m1 * m1 * hy + m0 * ra * (rr * m1 * 2.0 - m0 * ra)
+-        h = k1 * k1 - k2 * k0
+-
+-        if h >= 0.0 and wp.abs(k2) >= MINVAL:
+-            t = (-k1 - wp.sqrt(h)) / k2
+-            y = m1 + t * m2
+-            if y >= 0.0 and y <= m0:
+-                t_hit = t
++    if a == 0.0:
++        if b != 0.0:
++            t_side = -c / b
++            z_side = ray_origin[2] + t_side * ray_direction[2]
++            if t_side >= 0.0 and z_side >= -half_height and z_side <= half_height:
++                if t_hit < 0.0 or t_side < t_hit:
++                    t_hit = t_side
++        elif c == 0.0:
++            # The ray lies on a generator. Clip it to the finite cone.
++            if ray_origin[2] >= -half_height and ray_origin[2] <= half_height:
++                t_hit = 0.0
++            elif wp.abs(ray_direction[2]) > MINVAL:
++                t_base = (-half_height - ray_origin[2]) / ray_direction[2]
++                t_tip = (half_height - ray_origin[2]) / ray_direction[2]
++                t_enter = wp.max(0.0, wp.min(t_base, t_tip))
++                if t_enter <= wp.max(t_base, t_tip):
++                    if t_hit < 0.0 or t_enter < t_hit:
++                        t_hit = t_enter
++    else:
++        discriminant = b * b - 4.0 * a * c
++        if discriminant >= 0.0:
++            sqrt_discriminant = wp.sqrt(discriminant)
++            # q avoids subtracting nearly equal numbers in one root; c/q
++            # supplies the other root. Neither root has a fixed ordering.
++            q = -0.5 * (b + wp.where(b >= 0.0, sqrt_discriminant, -sqrt_discriminant))
++            t_side_0 = q / a
++            t_side_1 = t_side_0 if wp.abs(q) <= MINVAL else c / q
++            for i in range(2):
++                t_side = t_side_0 if i == 0 else t_side_1
++                z_side = ray_origin[2] + t_side * ray_direction[2]
++                if t_side >= 0.0 and z_side >= -half_height and z_side <= half_height:
++                    if t_hit < 0.0 or t_side < t_hit:
++                        t_hit = t_side
+ 
+     if t_hit >= 0.0:
+         hit_local = ray_origin + t_hit * ray_direction
+diff --git a/newton/tests/test_raycast.py b/newton/tests/test_raycast.py
+index 7f52711..7e5d0c6 100644
+--- a/newton/tests/test_raycast.py
++++ b/newton/tests/test_raycast.py
+@@ -212,16 +212,54 @@ def test_ray_intersect_barrel_cylinder(test: TestRaycast, device: str):
+ 
+ 
+ def test_ray_intersect_cone(test: TestRaycast, device: str):
++    """Return the first forward cone side or cap hit from inside or outside."""
+     out_t = wp.zeros(1, dtype=float, device=device)
+     out_n = wp.zeros(1, dtype=wp.vec3, device=device)
+     geom_to_world = wp.transform_identity()
+     size = wp.vec3(1.0, 1.0, 0.0)  # r, h (total height = 2*h)
++    x_inside = float(np.float32(0.5) - np.float32(2.0**-22))
++    x_outside = float(np.float32(0.5) + np.float32(2.0**-22))
++    generator_direction = wp.vec3(-1.0 / np.sqrt(5.0), 0.0, 2.0 / np.sqrt(5.0))
++    near_generator_direction = np.array([-1.0, 0.0, 4.0 * x_inside])
++    near_generator_direction /= np.linalg.norm(near_generator_direction)
+ 
+     # (name, origin, direction, expected, delta)
+     cases = [
+         ("hit_body", wp.vec3(-2.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), 1.5, 1e-3),
+         ("hit_base", wp.vec3(0.0, 0.0, -2.0), wp.vec3(0.0, 0.0, 1.0), 1.0, 1e-3),  # base at z=-1
+         ("hit_tip", wp.vec3(0.0, 0.0, 2.0), wp.vec3(0.0, 0.0, -1.0), 1.0, 1e-3),  # tip at z=+1
++        ("inside_side", wp.vec3(0.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), 0.5, 1e-5),
++        ("inside_base", wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, -1.0), 1.0, 1e-5),
++        (
++            "inside_oblique",
++            wp.vec3(0.0, 0.0, 0.0),
++            wp.vec3(1.0 / np.sqrt(10.0), 0.0, 3.0 / np.sqrt(10.0)),
++            np.sqrt(10.0) / 5.0,
++            1e-5,
++        ),
++        (
++            "linear_side",
++            wp.vec3(0.0, 0.0, 0.0),
++            wp.vec3(1.0 / np.sqrt(5.0), 0.0, 2.0 / np.sqrt(5.0)),
++            np.sqrt(5.0) / 4.0,
++            1e-5,
++        ),
++        ("side_behind", wp.vec3(2.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), -1.0, 1e-5),
++        (
++            "near_generator_inside",
++            wp.vec3(x_inside, 0.0, 0.0),
++            generator_direction,
++            (x_inside + 0.5) * np.sqrt(5.0) / 2.0,
++            1e-5,
++        ),
++        (
++            "near_generator_nonzero_quadratic",
++            wp.vec3(x_inside, 0.0, 0.0),
++            wp.vec3(*near_generator_direction),
++            (x_inside + 0.5) / (0.5 * near_generator_direction[2] - near_generator_direction[0]),
++            1e-5,
++        ),
++        ("near_generator_outside", wp.vec3(x_outside, 0.0, 0.0), generator_direction, -1.0, 1e-5),
+         ("miss", wp.vec3(-2.0, 2.0, 0.0), wp.vec3(1.0, 0.0, 0.0), -1.0, 1e-5),
+     ]
+ 
+@@ -236,6 +274,34 @@ def test_ray_intersect_cone(test: TestRaycast, device: str):
+             test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+ 
+ 
++def test_intersect_ray_cone_inside(test: TestRaycast, device: str):
++    """Preserve an interior cone exit through the public BVH raycast."""
++    builder = newton.ModelBuilder()
++    builder.begin_world()
++    cone_id = builder.add_shape_cone(body=-1, radius=1.0, half_height=1.0)
++    builder.end_world()
++    model = builder.finalize(device=device)
++
++    origins = wp.array(np.array([[0.0, 0.0, 0.0]], dtype=np.float32), dtype=wp.vec3, device=device)
++    directions = wp.array(np.array([[1.0, 0.0, 0.0]], dtype=np.float32), dtype=wp.vec3, device=device)
++    worlds = wp.array(np.array([0], dtype=np.int32), dtype=wp.int32, device=device)
++    out_dist = wp.empty(1, dtype=float, device=device)
++    out_shape_id = wp.empty(1, dtype=wp.int32, device=device)
++    out_normal = wp.empty(1, dtype=wp.vec3, device=device)
++    newton.intersect_ray(
++        model,
++        ray_origins=origins,
++        ray_directions=directions,
++        ray_worlds=worlds,
++        out_dist=out_dist,
++        out_shape_id=out_shape_id,
++        out_normal=out_normal,
++    )
++    test.assertAlmostEqual(out_dist.numpy()[0], 0.5, delta=1e-5)
++    test.assertEqual(out_shape_id.numpy()[0], cone_id)
++    np.testing.assert_allclose(out_normal.numpy()[0], [2.0 / np.sqrt(5.0), 0.0, 1.0 / np.sqrt(5.0)], atol=1e-5)
++
++
+ def test_ray_intersect_ellipsoid(test: TestRaycast, device: str):
+     out_t = wp.zeros(1, dtype=float, device=device)
+     out_n = wp.zeros(1, dtype=wp.vec3, device=device)
+@@ -878,6 +944,7 @@ add_function_test(
+     TestRaycast, "test_ray_intersect_barrel_cylinder", test_ray_intersect_barrel_cylinder, devices=devices
+ )
+ add_function_test(TestRaycast, "test_ray_intersect_cone", test_ray_intersect_cone, devices=devices)
++add_function_test(TestRaycast, "test_intersect_ray_cone_inside", test_intersect_ray_cone_inside, devices=devices)
+ add_function_test(TestRaycast, "test_ray_intersect_ellipsoid", test_ray_intersect_ellipsoid, devices=devices)
+ add_function_test(TestRaycast, "test_ray_intersect_mesh", test_ray_intersect_mesh, devices=devices)
+ add_function_test(TestRaycast, "test_mesh_ray_intersect", test_mesh_ray_intersect, devices=devices)

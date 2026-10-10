@@ -1,0 +1,204 @@
+{
+  "newton_file": "<candidate-checkout>/newton/__init__.py",
+  "warp_version": "1.18.0",
+  "cases": 3,
+  "checks": 15,
+  "failures": 6,
+  "records": [
+    {
+      "path": "helper",
+      "case": "near_generator_nonzero_quadratic_interior",
+      "tier": "core",
+      "expected": 1.11803354931249,
+      "actual": 1.118033528327942,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "near_generator_strict_interior",
+      "tier": "core",
+      "expected": 1.1180337355769339,
+      "actual": 1.118033766746521,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "helper",
+      "case": "near_generator_strict_exterior_miss",
+      "tier": "core",
+      "expected": -1,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "near_generator_nonzero_quadratic_interior",
+      "tier": "core",
+      "expected": 1.11803354931249,
+      "actual": 1.118033528327942,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "near_generator_strict_interior",
+      "tier": "core",
+      "expected": 1.1180337355769339,
+      "actual": 1.118033766746521,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=False",
+      "case": "near_generator_strict_exterior_miss",
+      "tier": "core",
+      "expected": -1,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "near_generator_nonzero_quadratic_interior",
+      "tier": "core",
+      "expected": 1.11803354931249,
+      "actual": 1.118033528327942,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "near_generator_strict_interior",
+      "tier": "core",
+      "expected": 1.1180337355769339,
+      "actual": 1.118033766746521,
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=False_fast_math=True",
+      "case": "near_generator_strict_exterior_miss",
+      "tier": "core",
+      "expected": -1,
+      "actual": -1.0,
+      "normal": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "passed": true
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "near_generator_nonzero_quadratic_interior",
+      "tier": "core",
+      "expected": 1.11803354931249,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "near_generator_strict_interior",
+      "tier": "core",
+      "expected": 1.1180337355769339,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    },
+    {
+      "path": "public_transformed=True_fast_math=False",
+      "case": "near_generator_strict_exterior_miss",
+      "tier": "core",
+      "expected": -1,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "near_generator_nonzero_quadratic_interior",
+      "tier": "core",
+      "expected": 1.11803354931249,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "near_generator_strict_interior",
+      "tier": "core",
+      "expected": 1.1180337355769339,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    },
+    {
+      "path": "public_transformed=True_fast_math=True",
+      "case": "near_generator_strict_exterior_miss",
+      "tier": "core",
+      "expected": -1,
+      "actual": 0.0,
+      "normal": [
+        0.4472135901451111,
+        0.8944272398948669,
+        -2.9802322387695312e-08
+      ],
+      "passed": false
+    }
+  ]
+}

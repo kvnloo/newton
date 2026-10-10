@@ -1,0 +1,16 @@
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     "cpu"      : "CPU"
+   Kernel cache:
+     <warp-cache>
+Newton <candidate-checkout>/newton/__init__.py
+Module cone_contract <cache-id> load on device 'cpu' took 3.05 ms  (cached)
+helper 256/256 passed
+Module newton._src.geometry.bvh <cache-id> load on device 'cpu' took 0.64 ms  (cached)
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.45 ms  (cached)
+public_fast_math=False 256/256 passed
+Module intersect_ray__locals___intersect_ray_kernel_<cache-id> <cache-id> load on device 'cpu' took 0.28 ms  (cached)
+public_fast_math=True 256/256 passed
+SUMMARY 768 / 768
