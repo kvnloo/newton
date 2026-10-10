@@ -39,6 +39,45 @@ def boltzmann(a: float, b: float, alpha: float):
 
 
 @wp.func
+def _smooth_extrema_parts(a: float, b: float, eps: float):
+    """Return ordered operands and their smooth correction for positive ``eps``."""
+    half_diff = 0.5 * a - 0.5 * b
+    half_width = 0.5 * wp.sqrt(eps)
+
+    if a > b:
+        high = a
+        low = b
+        half_gap = half_diff
+    else:
+        high = b
+        low = a
+        half_gap = -half_diff
+
+    # sqrt(half_gap**2 + eps / 4) - half_gap, rationalized and scaled.
+    # The positive width keeps scale nonzero even for equal inputs.
+    scale = wp.max(half_gap, half_width)
+    scaled_gap = half_gap / scale
+    scaled_width = half_width / scale
+    scaled_radius = wp.sqrt(scaled_gap * scaled_gap + scaled_width * scaled_width)
+    correction = half_width * (scaled_width / (scaled_radius + scaled_gap))
+    return high, low, correction
+
+
+@wp.func
+def _smooth_extrema_legacy_safe(a: float, b: float, eps: float) -> bool:
+    """Bound the original arithmetic away from overflow for normal ``eps``."""
+    # |a|, |b| <= 2**62 implies |a +/- b| <= 2**63. With eps <= 2**126,
+    # (a - b)**2 + eps <= 2**127, well below Float32's maximum. Below
+    # 2**-126, retain the scaled path so subnormal smoothing is not erased.
+    return (
+        wp.abs(a) <= 4.611686018427388e18
+        and wp.abs(b) <= 4.611686018427388e18
+        and eps >= 1.1754943508222875e-38
+        and eps <= 8.507059173023462e37
+    )
+
+
+@wp.func
 def smooth_max(a: float, b: float, eps: float):
     """
     Compute a smooth approximation of the maximum of two values.
@@ -54,8 +93,18 @@ def smooth_max(a: float, b: float, eps: float):
     Returns:
         float: A smooth approximation of `max(a, b)`.
     """
-    d = a - b
-    return 0.5 * (a + b + wp.sqrt(d * d + eps))
+    if eps <= 0.0:
+        # Preserve the existing forward behavior outside the documented
+        # positive-eps smoothing domain, including eps == 0.
+        d = a - b
+        return 0.5 * (a + b + wp.sqrt(d * d + eps))
+
+    if _smooth_extrema_legacy_safe(a, b, eps):
+        d = a - b
+        return 0.5 * (a + b + wp.sqrt(d * d + eps))
+
+    high, _, correction = _smooth_extrema_parts(a, b, eps)
+    return high + correction
 
 
 @wp.func
@@ -74,8 +123,16 @@ def smooth_min(a: float, b: float, eps: float):
     Returns:
         float: A smooth approximation of `min(a, b)`.
     """
-    d = a - b
-    return 0.5 * (a + b - wp.sqrt(d * d + eps))
+    if eps <= 0.0:
+        d = a - b
+        return 0.5 * (a + b - wp.sqrt(d * d + eps))
+
+    if _smooth_extrema_legacy_safe(a, b, eps):
+        d = a - b
+        return 0.5 * (a + b - wp.sqrt(d * d + eps))
+
+    _, low, correction = _smooth_extrema_parts(a, b, eps)
+    return low - correction
 
 
 @wp.func
