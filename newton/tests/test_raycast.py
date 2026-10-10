@@ -212,16 +212,70 @@ def test_ray_intersect_barrel_cylinder(test: TestRaycast, device: str):
 
 
 def test_ray_intersect_cone(test: TestRaycast, device: str):
+    """Return the first forward cone side or cap hit from inside or outside."""
     out_t = wp.zeros(1, dtype=float, device=device)
     out_n = wp.zeros(1, dtype=wp.vec3, device=device)
     geom_to_world = wp.transform_identity()
     size = wp.vec3(1.0, 1.0, 0.0)  # r, h (total height = 2*h)
+    x_inside = float(np.float32(0.5) - np.float32(2.0**-22))
+    x_outside = float(np.float32(0.5) + np.float32(2.0**-22))
+    generator_direction = wp.vec3(-1.0 / np.sqrt(5.0), 0.0, 2.0 / np.sqrt(5.0))
+    near_generator_direction = np.array([-1.0, 0.0, 4.0 * x_inside])
+    near_generator_direction /= np.linalg.norm(near_generator_direction)
 
     # (name, origin, direction, expected, delta)
     cases = [
         ("hit_body", wp.vec3(-2.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), 1.5, 1e-3),
         ("hit_base", wp.vec3(0.0, 0.0, -2.0), wp.vec3(0.0, 0.0, 1.0), 1.0, 1e-3),  # base at z=-1
         ("hit_tip", wp.vec3(0.0, 0.0, 2.0), wp.vec3(0.0, 0.0, -1.0), 1.0, 1e-3),  # tip at z=+1
+        ("inside_side", wp.vec3(0.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), 0.5, 1e-5),
+        ("inside_base", wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, -1.0), 1.0, 1e-5),
+        (
+            "inside_oblique",
+            wp.vec3(0.0, 0.0, 0.0),
+            wp.vec3(1.0 / np.sqrt(10.0), 0.0, 3.0 / np.sqrt(10.0)),
+            np.sqrt(10.0) / 5.0,
+            1e-5,
+        ),
+        (
+            "linear_side",
+            wp.vec3(0.0, 0.0, 0.0),
+            wp.vec3(1.0 / np.sqrt(5.0), 0.0, 2.0 / np.sqrt(5.0)),
+            np.sqrt(5.0) / 4.0,
+            1e-5,
+        ),
+        ("side_behind", wp.vec3(2.0, 0.0, 0.0), wp.vec3(1.0, 0.0, 0.0), -1.0, 1e-5),
+        (
+            "near_generator_inside",
+            wp.vec3(x_inside, 0.0, 0.0),
+            generator_direction,
+            (x_inside + 0.5) * np.sqrt(5.0) / 2.0,
+            1e-5,
+        ),
+        (
+            "near_generator_nonzero_quadratic",
+            wp.vec3(x_inside, 0.0, 0.0),
+            wp.vec3(*near_generator_direction),
+            (x_inside + 0.5) / (0.5 * near_generator_direction[2] - near_generator_direction[0]),
+            1e-5,
+        ),
+        ("near_generator_outside", wp.vec3(x_outside, 0.0, 0.0), generator_direction, -1.0, 1e-5),
+        # At 22.5 degrees, the near-generator ray stays non-axis-aligned. These
+        # float32 inputs differ only by a 2^-18 radial offset across the side.
+        (
+            "nonaxis_near_generator_inside",
+            wp.vec3(0.46193623542785645, 0.19134025275707245, 0.0),
+            wp.vec3(-0.4131714999675751, -0.17114123702049255, 0.8944271802902222),
+            1.1180297062945266,
+            1e-5,
+        ),
+        (
+            "nonaxis_near_generator_outside",
+            wp.vec3(0.46194329857826233, 0.19134317338466644, 0.0),
+            wp.vec3(-0.4131714999675751, -0.17114123702049255, 0.8944271802902222),
+            -1.0,
+            1e-5,
+        ),
         ("miss", wp.vec3(-2.0, 2.0, 0.0), wp.vec3(1.0, 0.0, 0.0), -1.0, 1e-5),
     ]
 
@@ -234,6 +288,34 @@ def test_ray_intersect_cone(test: TestRaycast, device: str):
                 device=device,
             )
             test.assertAlmostEqual(out_t.numpy()[0], expected, delta=delta)
+
+
+def test_intersect_ray_cone_inside(test: TestRaycast, device: str):
+    """Preserve an interior cone exit through the public BVH raycast."""
+    builder = newton.ModelBuilder()
+    builder.begin_world()
+    cone_id = builder.add_shape_cone(body=-1, radius=1.0, half_height=1.0)
+    builder.end_world()
+    model = builder.finalize(device=device)
+
+    origins = wp.array(np.array([[0.0, 0.0, 0.0]], dtype=np.float32), dtype=wp.vec3, device=device)
+    directions = wp.array(np.array([[1.0, 0.0, 0.0]], dtype=np.float32), dtype=wp.vec3, device=device)
+    worlds = wp.array(np.array([0], dtype=np.int32), dtype=wp.int32, device=device)
+    out_dist = wp.empty(1, dtype=float, device=device)
+    out_shape_id = wp.empty(1, dtype=wp.int32, device=device)
+    out_normal = wp.empty(1, dtype=wp.vec3, device=device)
+    newton.intersect_ray(
+        model,
+        ray_origins=origins,
+        ray_directions=directions,
+        ray_worlds=worlds,
+        out_dist=out_dist,
+        out_shape_id=out_shape_id,
+        out_normal=out_normal,
+    )
+    test.assertAlmostEqual(out_dist.numpy()[0], 0.5, delta=1e-5)
+    test.assertEqual(out_shape_id.numpy()[0], cone_id)
+    np.testing.assert_allclose(out_normal.numpy()[0], [2.0 / np.sqrt(5.0), 0.0, 1.0 / np.sqrt(5.0)], atol=1e-5)
 
 
 def test_ray_intersect_ellipsoid(test: TestRaycast, device: str):
@@ -878,6 +960,7 @@ add_function_test(
     TestRaycast, "test_ray_intersect_barrel_cylinder", test_ray_intersect_barrel_cylinder, devices=devices
 )
 add_function_test(TestRaycast, "test_ray_intersect_cone", test_ray_intersect_cone, devices=devices)
+add_function_test(TestRaycast, "test_intersect_ray_cone_inside", test_intersect_ray_cone_inside, devices=devices)
 add_function_test(TestRaycast, "test_ray_intersect_ellipsoid", test_ray_intersect_ellipsoid, devices=devices)
 add_function_test(TestRaycast, "test_ray_intersect_mesh", test_ray_intersect_mesh, devices=devices)
 add_function_test(TestRaycast, "test_mesh_ray_intersect", test_mesh_ray_intersect, devices=devices)

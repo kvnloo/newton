@@ -526,50 +526,85 @@ def ray_intersect_cone(
     if radius <= 0.0:
         return t_hit, normal
 
-    # pa = tip (cone extremes), pb = base center, ra = 0 (tip radius), rb = radius (base radius)
     # Check conventions.rst, section "Newton Collision Primitives"
-    pa = wp.vec3(0.0, 0.0, half_height)  # tip at +half_height
-    pb = wp.vec3(0.0, 0.0, -half_height)  # base center at -half_height
-    ra = 0.0  # radius at tip
-    rb = radius  # radius at base
+    # The base must be considered even when the ray starts between the base
+    # and tip: in that case it may be the first exit from the closed cone.
+    if wp.abs(ray_direction[2]) > MINVAL:
+        t_base = (-half_height - ray_origin[2]) / ray_direction[2]
+        if t_base >= 0.0:
+            x_base = ray_origin[0] + t_base * ray_direction[0]
+            y_base = ray_origin[1] + t_base * ray_direction[1]
+            if x_base * x_base + y_base * y_base <= radius * radius:
+                t_hit = t_base
 
-    ba = pb - pa
-    oa = ray_origin - pa
-    ob = ray_origin - pb
-    m0 = wp.dot(ba, ba)
-    m1 = wp.dot(oa, ba)
-    m2 = wp.dot(ray_direction, ba)
-    m3 = wp.dot(ray_direction, oa)
-    m5 = wp.dot(oa, oa)
-    m9 = wp.dot(ob, ba)
+    # On the side, x(t)^2 + y(t)^2 = slope^2 * (half_height - z(t))^2.
+    # Check both roots against the finite cone and the forward ray. The sign
+    # of the quadratic coefficient can change, so neither algebraic root is
+    # always the nearer hit.
+    slope = radius / (2.0 * half_height)
+    slope_sq = slope * slope
+    dz_to_tip = half_height - ray_origin[2]
+    radial_dir_sq = ray_direction[0] * ray_direction[0] + ray_direction[1] * ray_direction[1]
+    axial_dir_sq = slope_sq * ray_direction[2] * ray_direction[2]
+    a = radial_dir_sq - axial_dir_sq
+    radial_cross = ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1]
+    axial_cross = slope_sq * dz_to_tip * ray_direction[2]
+    b = 2.0 * (radial_cross + axial_cross)
+    radial_origin_sq = ray_origin[0] * ray_origin[0] + ray_origin[1] * ray_origin[1]
+    axial_origin_sq = slope_sq * dz_to_tip * dz_to_tip
+    c = radial_origin_sq - axial_origin_sq
 
-    # caps
-    if m1 < 0.0:
-        temp = oa * m2 - ray_direction * m1
-        if wp.dot(temp, temp) < (ra * ra * m2 * m2):
-            if wp.abs(m2) > MINVAL:
-                t_hit = -m1 / m2
-    elif m9 > 0.0:
-        if wp.abs(m2) > MINVAL:
-            t = -m9 / m2
-            temp_ob = ob + ray_direction * t
-            if wp.dot(temp_ob, temp_ob) < (rb * rb):
-                t_hit = t
+    # Near a generator, float32 cancellation can erase the small coefficients
+    # that distinguish an inside exit from an outside miss. Recompute only
+    # those ill-conditioned coefficients from the input values in float64.
+    if wp.abs(a) <= 1.0e-6 * (radial_dir_sq + axial_dir_sq):
+        x64 = wp.float64(ray_origin[0])
+        y64 = wp.float64(ray_origin[1])
+        z64 = wp.float64(ray_origin[2])
+        dx64 = wp.float64(ray_direction[0])
+        dy64 = wp.float64(ray_direction[1])
+        dz64 = wp.float64(ray_direction[2])
+        h64 = wp.float64(half_height)
+        slope64 = wp.float64(radius) / (wp.float64(2.0) * h64)
+        slope_sq64 = slope64 * slope64
+        dz_to_tip64 = h64 - z64
+        a = wp.float32(dx64 * dx64 + dy64 * dy64 - slope_sq64 * dz64 * dz64)
+        b = wp.float32(wp.float64(2.0) * (x64 * dx64 + y64 * dy64 + slope_sq64 * dz_to_tip64 * dz64))
+        c = wp.float32(x64 * x64 + y64 * y64 - slope_sq64 * dz_to_tip64 * dz_to_tip64)
 
-    if t_hit < 0.0:
-        # body
-        rr = ra - rb
-        hy = m0 + rr * rr
-        k2 = m0 * m0 - m2 * m2 * hy
-        k1 = m0 * m0 * m3 - m1 * m2 * hy + m0 * ra * (rr * m2 * 1.0)
-        k0 = m0 * m0 * m5 - m1 * m1 * hy + m0 * ra * (rr * m1 * 2.0 - m0 * ra)
-        h = k1 * k1 - k2 * k0
-
-        if h >= 0.0 and wp.abs(k2) >= MINVAL:
-            t = (-k1 - wp.sqrt(h)) / k2
-            y = m1 + t * m2
-            if y >= 0.0 and y <= m0:
-                t_hit = t
+    if a == 0.0:
+        if b != 0.0:
+            t_side = -c / b
+            z_side = ray_origin[2] + t_side * ray_direction[2]
+            if t_side >= 0.0 and z_side >= -half_height and z_side <= half_height:
+                if t_hit < 0.0 or t_side < t_hit:
+                    t_hit = t_side
+        elif c == 0.0:
+            # The ray lies on a generator. Clip it to the finite cone.
+            if ray_origin[2] >= -half_height and ray_origin[2] <= half_height:
+                t_hit = 0.0
+            elif wp.abs(ray_direction[2]) > MINVAL:
+                t_base = (-half_height - ray_origin[2]) / ray_direction[2]
+                t_tip = (half_height - ray_origin[2]) / ray_direction[2]
+                t_enter = wp.max(0.0, wp.min(t_base, t_tip))
+                if t_enter <= wp.max(t_base, t_tip):
+                    if t_hit < 0.0 or t_enter < t_hit:
+                        t_hit = t_enter
+    else:
+        discriminant = b * b - 4.0 * a * c
+        if discriminant >= 0.0:
+            sqrt_discriminant = wp.sqrt(discriminant)
+            # q avoids subtracting nearly equal numbers in one root; c/q
+            # supplies the other root. Neither root has a fixed ordering.
+            q = -0.5 * (b + wp.where(b >= 0.0, sqrt_discriminant, -sqrt_discriminant))
+            t_side_0 = q / a
+            t_side_1 = t_side_0 if wp.abs(q) <= MINVAL else c / q
+            for i in range(2):
+                t_side = t_side_0 if i == 0 else t_side_1
+                z_side = ray_origin[2] + t_side * ray_direction[2]
+                if t_side >= 0.0 and z_side >= -half_height and z_side <= half_height:
+                    if t_hit < 0.0 or t_side < t_hit:
+                        t_hit = t_side
 
     if t_hit >= 0.0:
         hit_local = ray_origin + t_hit * ray_direction
