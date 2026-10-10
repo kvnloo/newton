@@ -1,0 +1,1 @@
+Stabilize `newton.math.boltzmann()` against overflowing and underflowing exponential weights, preserving cancellation-sensitive means and representable float32 reverse-mode gradients with double-precision intermediates.

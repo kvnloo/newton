@@ -33,9 +33,20 @@ def boltzmann(a: float, b: float, alpha: float):
     Returns:
         float: The Boltzmann-weighted average of `a` and `b`.
     """
-    e1 = wp.exp(alpha * a)
-    e2 = wp.exp(alpha * b)
-    return (a * e1 + b * e2) / (e1 + e2)
+    # Keep differences and reverse-mode weight derivatives representable.
+    a64 = wp.float64(a)
+    b64 = wp.float64(b)
+    difference = a64 - b64
+    scaled_difference = wp.float64(alpha) * difference
+
+    if scaled_difference >= wp.float64(0.0):
+        ratio = wp.exp(-scaled_difference)
+        weight = ratio / (wp.float64(1.0) + ratio)
+        return float(a64 - difference * weight)
+
+    ratio = wp.exp(scaled_difference)
+    weight = ratio / (wp.float64(1.0) + ratio)
+    return float(b64 + difference * weight)
 
 
 @wp.func
