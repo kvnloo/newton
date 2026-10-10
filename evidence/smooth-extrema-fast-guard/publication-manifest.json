@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "authorship": "Authored by dot (AI assistant). Connected Git-data publication assigns account author/committer metadata; it does not imply human authorship.",
+  "repository": "kvnloo/newton",
+  "publication_branch": "evidence/smooth-extrema-fast-guard",
+  "status": "HOLD for upstream promotion",
+  "source_mapping": {
+    "captured_local_commit": "f5cedc5626a364c0228f921d9ce58ba33a6ada02",
+    "published_remote_commit": "e4a8db7fd5a790a2e65ff80552411f7ba8c513a9",
+    "source_branch": "fix/smooth-extrema-fast-guard",
+    "sole_parent": "a6e1649b112e3d962b35f7dad66780dc55150588",
+    "identical_tree": "7fe555042a8be3b59559a79153b4543b5acf7797",
+    "reason_for_distinct_commit_ids": "Publication uses a different commit message and connected account author/committer metadata. Source bytes and sole parent are unchanged.",
+    "archive_semantics": "Historical capture-time receipts refer to the local commit. Use the published remote commit for remote checkout. No archive member was rewritten."
+  },
+  "evidence_commit_sole_parent": "e4a8db7fd5a790a2e65ff80552411f7ba8c513a9",
+  "archive": {
+    "path": "smooth-extrema-HOLD-evidence.tar.gz",
+    "bytes": 88976,
+    "sha256": "4c248ea149bf486944f4e59d61d8a418108e8b36ad5bfcfb33d5492ae77a7666",
+    "git_blob_sha1": "1e1ad9e9cd889f6fc6dfa8d2b7a21efa4e29ddd3",
+    "regular_text_files": 42,
+    "normalized_text_files": 15,
+    "internal_manifest": "receipts/evidence-manifest.json",
+    "frozen_archive_unchanged": true
+  },
+  "source_files": [
+    {
+      "path": "newton/_src/math/__init__.py",
+      "sha256": "d87cbb366be2a318a72090ff1bc1f02896933843dbe93857ba7378e42bfe1489",
+      "git_blob_sha1": "937b990c98974a8fba9ca0333b07b0e66b0a4a80"
+    },
+    {
+      "path": "newton/tests/test_math.py",
+      "sha256": "c5cebaf808821f731cee3b2b5c1737a0b7a5cabbe89eeac31713602c4567599c",
+      "git_blob_sha1": "224eb735ec7cfe41aff19ff800d5b68b6f935ad4"
+    },
+    {
+      "path": "changelog/+smooth-extrema-finite-7c2f91a4.fixed.md",
+      "sha256": "7595e003243f458be799e1dd73d53dd67ee70e9d58cf2e07b56013cf854e10c6",
+      "git_blob_sha1": "9605f57bd1ff1ae123d6bedab534d0b9493df70f"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "2fd42c5c2cf62f8750b191dd01cc1a196a4a3e43a27b42f94b04bcd2e2b24b5a",
+      "git_blob_sha1": "4f8c04bff899a3f3975ebc1e39d9c568374579fc"
+    }
+  ],
+  "lineage_credit": [
+    "Eric Heiden: original smooth-extrema implementation",
+    "Eric Shi: public docstrings"
+  ],
+  "limits": [
+    "CPU-only recorded runs",
+    "Measurable helper overhead; descriptive timings, not statistical guarantees",
+    "No GPU or whole-solver performance measurement",
+    "Fast path retains baseline finite cancellation error",
+    "Nonpositive-epsilon forward compatibility only",
+    "No upstream posting or PR in this publication"
+  ]
+}
