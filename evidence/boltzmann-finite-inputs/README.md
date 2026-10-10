@@ -17,6 +17,17 @@ The inspected checkout has no internal call sites for this public helper.
 
 Base: `a6e1649b112e3d962b35f7dad66780dc55150588`.
 
+## Attribution
+
+Credit Eric Shi for importing the existing `warp.sim` helper into Newton in
+[1be9943](https://github.com/newton-physics/newton/commit/1be9943221dc0920c6f27ea86ef1d6bb8cfaa2ba),
+including the original exponential-weight formula, and Eric Heiden for moving
+the helper into the public `newton.math` API in
+[958e363](https://github.com/newton-physics/newton/commit/958e363c0983c8af71765a3ba93e58db54e1d17f)
+(#1481). This work builds on the collective Newton and Warp contributors.
+These credits describe software provenance, not invention of the mathematical
+Boltzmann-weighted average.
+
 ## Numerical validation
 
 - Three frozen regression tests produced four assertion failures on unchanged
