@@ -943,6 +943,9 @@ class DelassusOperator:
             contacts: The container holding the allocated contacts data.
             solver: The solver type to use for linear systems defined by the Delassus operator.
             solver_kwargs: Additional keyword arguments to pass to the solver constructor.
+
+        Raises:
+            ValueError: If the dense matrix size exceeds the int32 indexing limit.
         """
 
         # Ensure the model container is valid
@@ -984,6 +987,16 @@ class DelassusOperator:
         self._model_maxdims = sum(self._world_maxdims)
         self._model_maxsize = sum(self._world_maxsize)
         self._max_of_max_total_D_size = max(self._world_maxsize) if self._world_maxsize else 0
+
+        # Dense matrix offsets and Warp array dimensions use signed int32.
+        max_dense_size = 2**31 - 1
+        if self._model_maxsize > max_dense_size:
+            raise ValueError(
+                f"Kamino dense Delassus matrix requires {self._model_maxsize} elements across "
+                f"{self._num_worlds} worlds, exceeding the int32 indexing limit of {max_dense_size}. "
+                "Use fewer worlds, lower max_contacts_per_world, or set sparse_jacobian=True "
+                "and sparse_dynamics=True with an iterative linear solver."
+            )
 
         # Use the model's device
         self._device = model.device

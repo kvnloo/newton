@@ -4,13 +4,15 @@
 """Unit tests for the DelassusOperator class"""
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import warp as wp
 
 from newton import ModelBuilder
-from newton._src.solvers.kamino._src.core.data import DataKamino
-from newton._src.solvers.kamino._src.core.model import ModelKamino
+from newton._src.solvers.kamino._src.core.data import DataKamino, DataKaminoInfo
+from newton._src.solvers.kamino._src.core.model import ModelKamino, ModelKaminoInfo
+from newton._src.solvers.kamino._src.core.size import SizeKamino
 from newton._src.solvers.kamino._src.dynamics.delassus import BlockSparseMatrixFreeDelassusOperator, DelassusOperator
 from newton._src.solvers.kamino._src.geometry.contacts import ContactsKamino
 from newton._src.solvers.kamino._src.kinematics.constraints import get_max_constraints_per_world
@@ -50,7 +52,7 @@ def check_delassus_allocations(
     # Compute expected and allocated dimensions and sizes
     expected_max_constraint_dims = get_max_constraints_per_world(model, limits, contacts)
     num_worlds = len(expected_max_constraint_dims)
-    expected_D_sizes = [expected_max_constraint_dims[i] * expected_max_constraint_dims[i] for i in range(num_worlds)]
+    expected_D_sizes = [int(expected_max_constraint_dims[i]) ** 2 for i in range(num_worlds)]
     delassus_maxdim_np = delassus.info.maxdim.numpy()
     fixture.assertEqual(
         len(delassus_maxdim_np), num_worlds, "Number of Delassus operator blocks does not match the number of worlds"
@@ -94,6 +96,94 @@ def print_delassus_info(delassus: DelassusOperator) -> None:
 ###
 # Tests
 ###
+
+
+class TestDelassusOperatorSizes(unittest.TestCase):
+    """Check host sizing without allocating multi-gigabyte dense buffers."""
+
+    def setUp(self):
+        self.device = wp.get_device("cpu")
+
+    def _make_containers(self, dimensions):
+        num_worlds = len(dimensions)
+        vector_offsets = []
+        offset = 0
+        for dimension in dimensions:
+            vector_offsets.append(offset)
+            offset += int(dimension)
+        maxdim = wp.array(np.array(dimensions, dtype=np.int32), dtype=wp.int32, device=self.device)
+        model = ModelKamino(
+            _device=self.device,
+            size=SizeKamino(num_worlds=num_worlds),
+            info=ModelKaminoInfo(
+                num_worlds=num_worlds,
+                num_joint_bilateral_cts=maxdim,
+                num_joint_bounded_cts=wp.zeros(num_worlds, dtype=wp.int32, device=self.device),
+                max_total_cts=maxdim,
+                total_cts_offset=wp.array(vector_offsets, dtype=wp.int32, device=self.device),
+            ),
+        )
+        data = DataKamino(info=DataKaminoInfo(num_total_cts=wp.zeros(num_worlds, dtype=wp.int32, device=self.device)))
+        return model, data
+
+    def test_reject_oversized_dense_allocation(self):
+        """Reject wrapped totals and per-world squares before allocating the dense matrix."""
+        cases = (
+            ("negative_total_wrap", [487] * 16384),
+            ("positive_total_wrap", [487] * 20000),
+            ("negative_square_wrap", [46341]),
+            ("zero_square_wrap", [65536]),
+            ("first_unsupported_total", [32768, 32768]),
+        )
+        for name, dimensions in cases:
+            with self.subTest(name=name):
+                model, data = self._make_containers(dimensions)
+                expected_size = sum(int(dimension) ** 2 for dimension in dimensions)
+                with patch(
+                    "newton._src.solvers.kamino._src.dynamics.delassus.wp.zeros",
+                    side_effect=AssertionError("Dense allocation must not be attempted"),
+                ) as zeros:
+                    with np.errstate(over="ignore"), self.assertRaisesRegex(ValueError, str(expected_size)) as error:
+                        DelassusOperator().finalize(model=model, data=data)
+                    zeros.assert_not_called()
+                for guidance in ("2147483647", "worlds", "max_contacts_per_world", "sparse_dynamics=True", "iterative"):
+                    self.assertIn(guidance, str(error.exception))
+
+    def test_accept_largest_dense_allocation(self):
+        """Accept the exact int32 size limit with unwrapped host sizes and device offsets."""
+        # These four squares sum to 2**31 - 1; only the dense allocation is replaced.
+        dimensions = [46339, 1, 10, 425]
+        expected_size = sum(int(dimension) ** 2 for dimension in dimensions)
+        self.assertEqual(expected_size, 2**31 - 1)
+        model, data = self._make_containers(dimensions)
+        empty_matrix = wp.zeros(0, dtype=wp.float32, device=self.device)
+        with patch("newton._src.solvers.kamino._src.dynamics.delassus.wp.zeros", return_value=empty_matrix) as zeros:
+            delassus = DelassusOperator(model=model, data=data)
+        zeros.assert_called_once_with(shape=(expected_size,), dtype=wp.float32, device=self.device)
+        self.assertEqual(delassus.num_maxsize, expected_size)
+        self.assertIs(type(delassus.num_maxsize), int)
+        self.assertIs(type(delassus.num_maxdims), int)
+        offset = 0
+        expected_offsets = []
+        for dimension in dimensions:
+            expected_offsets.append(offset)
+            offset += int(dimension) ** 2
+        np.testing.assert_array_equal(delassus.info.mio.numpy(), expected_offsets)
+        self.assertEqual(delassus.info.mio.dtype, wp.int32)
+
+    def test_preserve_multiworld_dense_layout(self):
+        """Preserve real heterogeneous allocations and int32 matrix and vector offsets."""
+        dimensions = [2, 3, 5]
+        model, data = self._make_containers(dimensions)
+        delassus = DelassusOperator(model=model, data=data)
+        self.assertEqual(delassus.D.size, 38)
+        self.assertEqual(delassus.num_maxsize, 38)
+        self.assertEqual(delassus.num_maxdims, 10)
+        np.testing.assert_array_equal(delassus.info.maxdim.numpy(), dimensions)
+        np.testing.assert_array_equal(delassus.info.mio.numpy(), [0, 4, 13])
+        np.testing.assert_array_equal(delassus.info.vio.numpy(), [0, 2, 5])
+        for array in (delassus.info.maxdim, delassus.info.dim, delassus.info.mio, delassus.info.vio):
+            self.assertEqual(array.dtype, wp.int32)
 
 
 class TestDelassusOperator(unittest.TestCase):

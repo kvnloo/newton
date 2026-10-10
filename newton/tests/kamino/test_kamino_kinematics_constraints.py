@@ -7,12 +7,16 @@ KAMINO: UNIT TESTS: KINEMATICS: CONSTRAINTS
 
 import unittest
 
+import numpy as np
 import warp as wp
 
 from newton import ModelBuilder
-from newton._src.solvers.kamino._src.core.model import ModelKamino
+from newton._src.solvers.kamino._src.core.model import ModelKamino, ModelKaminoInfo
 from newton._src.solvers.kamino._src.geometry.contacts import ContactsKamino
-from newton._src.solvers.kamino._src.kinematics.constraints import make_unilateral_constraints_info
+from newton._src.solvers.kamino._src.kinematics.constraints import (
+    get_max_constraints_per_world,
+    make_unilateral_constraints_info,
+)
 from newton._src.solvers.kamino._src.kinematics.limits import LimitsKamino
 from newton._src.solvers.kamino._src.utils import logger as msg
 from newton.tests.kamino import setup_tests, test_context
@@ -51,6 +55,26 @@ class TestKinematicsConstraints(unittest.TestCase):
         self.default_device = None
         if self.verbose:
             msg.reset_log_level()
+
+    def test_max_constraints_host_arithmetic(self):
+        """Convert int32 constraint components before adding or multiplying capacities."""
+        model = ModelKamino(
+            info=ModelKaminoInfo(
+                num_worlds=1,
+                num_joint_bilateral_cts=wp.array([2**31 - 1], dtype=wp.int32, device=self.default_device),
+                num_joint_bounded_cts=wp.array([1], dtype=wp.int32, device=self.default_device),
+            )
+        )
+        limits = LimitsKamino()
+        limits.data.model_max_limits_host = 1
+        limits.data.world_max_limits_host = [np.int32(1)]
+        contacts = ContactsKamino(capacity=[1], device=self.default_device)
+        contacts.data.model_max_contacts_host = 2**30
+        contacts.data.world_max_contacts_host = [np.int32(2**30)]
+        with np.errstate(over="ignore"):
+            dimensions = get_max_constraints_per_world(model, limits, contacts)
+        self.assertEqual(dimensions, [2**31 + 1 + 3 * 2**30])
+        self.assertIs(type(dimensions[0]), int)
 
     def test_01_single_model_make_constraints(self):
         """

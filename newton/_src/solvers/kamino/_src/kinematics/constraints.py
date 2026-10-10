@@ -78,7 +78,8 @@ def get_max_constraints_per_world(
     maxnl = limits.world_max_limits_host if limits and limits.model_max_limits_host > 0 else [0] * nw
     maxnc = contacts.world_max_contacts_host if contacts and contacts.model_max_contacts_host > 0 else [0] * nw
     nbc = model.info.num_joint_bounded_cts.numpy()
-    maxncts = [njc[i] + nbc[i] + maxnl[i] + 3 * maxnc[i] for i in range(nw)]
+    # Promote device int32 counts before host arithmetic can overflow.
+    maxncts = [int(njc[i]) + int(nbc[i]) + int(maxnl[i]) + 3 * int(maxnc[i]) for i in range(nw)]
     return maxncts
 
 
