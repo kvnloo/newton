@@ -598,7 +598,12 @@ def parse_urdf(
         el_mimic = joint.find("mimic")
         if el_mimic is not None:
             joint_data["mimic_joint"] = el_mimic.get("joint")
-            joint_data["mimic_coef0"] = float(el_mimic.get("offset", 0))
+            # Offset is in the follower's coordinates. Prismatic coordinates are
+            # lengths and follow `scale`; revolute offsets stay in radians.
+            mimic_offset = float(el_mimic.get("offset", 0))
+            if joint.get("type") == "prismatic":
+                mimic_offset *= scale
+            joint_data["mimic_coef0"] = mimic_offset
             joint_data["mimic_coef1"] = float(el_mimic.get("multiplier", 1))
 
         parent_child_joint[(parent, child)] = joint_data
