@@ -1,0 +1,7 @@
+test_semi_implicit_d6_2dof_drive_at_target_cpu (newton.tests.test_joint_drive.TestJointDrive.test_semi_implicit_d6_2dof_drive_at_target_cpu) ... ok
+Ran 1 test in 0.106s
+OK
+FOCUSED_EXIT=0
+Ran 26 tests in 4.788s
+OK
+ADJACENT_EXIT=0

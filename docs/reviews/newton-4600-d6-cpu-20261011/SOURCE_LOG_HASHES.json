@@ -1,0 +1,10 @@
+{
+  "description": "SHA-256 of locally captured source logs before removing environment initialization, cache paths/timing, and unrelated command diagnostics. Published logs contain unmodified result lines for every case. Raw logs are not distributed.",
+  "sha256": {
+    "baseline-witness.log": "5e9af9fa1a30cc36abd4c44e0626f8409cf8c6305f16fa2dcfa7f929bd8a9de5",
+    "owner-witness.log": "5340c1a37705b16ec78e2110a1a3fba6ca57d28d41ffcbe85d1f00de96b9864d",
+    "baseline-physical.log": "20815c788b680b53cef4cf79c167f3b1c88cde9e6fb6115284499d3a5a89d40b",
+    "owner-physical.log": "6e28a049152f74711dc1babf01c1aa57b285db8445b2655fc6fc67cf01cdbe82",
+    "owner-tests.log": "f7b86cdb3955d9026d2f4669a95d6c39b722941f96240f328623f67cafb52135"
+  }
+}

@@ -1,0 +1,18 @@
+IMPORT_OK VERIFIED_CHECKOUT WARP 1.18.0 NUMPY 2.5.3
+{"case": "0/1", "framed": false, "offset": 0.0, "orientation_error": 4.671481002027633e-08, "qd": [-8.940699569581767e-11, 2.9802332823791744e-10], "body_speed": 2.9208271912217754e-10, "pose_drift": 0.0, "passed": true}
+{"case": "1/0", "framed": false, "offset": 0.0, "orientation_error": 5.559254392939472e-08, "qd": [-0.0004521284718066454, 0.0004227074095979333], "body_speed": 0.00041454529855400324, "pose_drift": 2.1606683731079102e-07, "passed": false}
+{"case": "1/2", "framed": false, "offset": 0.0, "orientation_error": 4.671481002027633e-08, "qd": [0.0004335987032391131, 0.00039202667539939284], "body_speed": 0.00040000013541430235, "pose_drift": 2.0116567611694336e-07, "passed": false}
+{"case": "2/1", "framed": false, "offset": 0.0, "orientation_error": 5.559254392939472e-08, "qd": [0.0005695906584151089, 1.6152467651409097e-05], "body_speed": 0.0005675989086739719, "pose_drift": 2.7567148208618164e-07, "passed": false}
+{"case": "2/0", "framed": false, "offset": 0.0, "orientation_error": 4.671481002027633e-08, "qd": [-0.00043792641372419894, 0.0006331579061225057], "body_speed": 0.000595976016484201, "pose_drift": 3.129243850708008e-07, "passed": false}
+{"case": "0/2", "framed": false, "offset": 0.0, "orientation_error": 4.671481002027633e-08, "qd": [-1.1059352739151151e-10, 0.0007999996887519956], "body_speed": 0.000784053117968142, "pose_drift": 3.8743019104003906e-07, "passed": false}
+{"case": "rotated", "framed": false, "offset": 0.0, "orientation_error": 4.671481002027633e-08, "qd": [0.00012788189633283764, 0.0005172467790544033], "body_speed": 0.0005128653137944639, "pose_drift": 2.5331974029541016e-07, "passed": false}
+{"case": "0/1", "framed": true, "offset": 0.0, "orientation_error": 4.8876916625140154e-08, "qd": [-8.940700263471157e-11, 2.980233004823418e-10], "body_speed": 2.508857843697143e-10, "pose_drift": 0.0, "passed": true}
+{"case": "1/0", "framed": true, "offset": 0.0, "orientation_error": 6.3391882354491e-08, "qd": [-0.0004521285300143063, 0.0004227074678055942], "body_speed": 0.0005041764234192669, "pose_drift": 2.384185791015625e-07, "passed": false}
+{"case": "1/2", "framed": true, "offset": 0.0, "orientation_error": 6.85964463009725e-08, "qd": [0.000433598761446774, 0.00039202673360705376], "body_speed": 0.00040000013541430235, "pose_drift": 2.086162567138672e-07, "passed": false}
+{"case": "2/1", "framed": true, "offset": 0.0, "orientation_error": 1.1567717583815806e-07, "qd": [0.0005695911240763962, 1.615248402231373e-05], "body_speed": 0.0005675993161275983, "pose_drift": 2.384185791015625e-07, "passed": false}
+{"case": "2/0", "framed": true, "offset": 0.0, "orientation_error": 9.559816893656148e-08, "qd": [-0.00043792661745101213, 0.0006331580807454884], "body_speed": 0.0004922333173453808, "pose_drift": 2.682209014892578e-07, "passed": false}
+{"case": "0/2", "framed": true, "offset": 0.0, "orientation_error": 8.31211774965368e-08, "qd": [-7.50456086162643e-11, 0.0007999996887519956], "body_speed": 0.000784053176175803, "pose_drift": 3.8743019104003906e-07, "passed": false}
+{"case": "rotated", "framed": true, "offset": 0.0, "orientation_error": 6.18756676451504e-08, "qd": [0.00012788128515239805, 0.0005172465462237597], "body_speed": 0.0005128650227561593, "pose_drift": 2.384185791015625e-07, "passed": false}
+{"case": "off_target_XY", "framed": false, "offset": 0.05, "orientation_error": 4.671481002027633e-08, "qd": [9.99999392661266e-05, 2.9769234299870106e-10], "body_speed": 9.99999392661266e-05, "pose_drift": 5.21540641784668e-08, "passed": true}
+SUMMARY 3 PASS 12 FAIL ATOL 1e-08 POSE_ATOL 1e-06
+PROBE_EXIT=1

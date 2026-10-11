@@ -1,0 +1,7 @@
+baseline-witness exit=1 expected=1
+owner-witness exit=0 expected=0
+baseline-physical exit=1 expected=1
+owner-physical exit=0 expected=0
+owner-focused exit=0 expected=0
+owner-adjacent exit=0 expected=0
+All expected CPU regression gates reproduced.

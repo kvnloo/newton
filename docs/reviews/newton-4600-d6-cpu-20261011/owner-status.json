@@ -1,0 +1,25 @@
+{
+  "fetched_at": "2026-10-11T00:02:00Z",
+  "source": "https://github.com/newton-physics/newton/pull/4600",
+  "owner_head": "c7a91b485e33ec489684c79b0deda2dd121c439f",
+  "cla": {
+    "url": "https://github.com/newton-physics/newton/pull/4600#issuecomment-6069503235",
+    "author": "linux-foundation-easycla[bot]",
+    "updated_at": "2026-10-08T21:35:23Z",
+    "exact_status": "The commit (c7a91b485e33ec489684c79b0deda2dd121c439f) is not authorized under a signed CLA."
+  },
+  "existing_review": {
+    "url": "https://github.com/newton-physics/newton/pull/4600#discussion_r4224394193",
+    "author": "coderabbitai[bot]",
+    "priority": "Minor",
+    "finding": "Start the test docstring with an imperative summary.",
+    "path": "newton/tests/test_joint_drive.py",
+    "line": 356
+  },
+  "review_submission": {
+    "url": "https://github.com/newton-physics/newton/pull/4600#pullrequestreview-5463147680",
+    "state": "COMMENTED",
+    "author": "coderabbitai[bot]"
+  },
+  "scope_note": "Fetched discussion timeline only. No current check-runs/status fetch, head refresh, or human approval inferred."
+}

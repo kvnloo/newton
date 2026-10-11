@@ -1,0 +1,27 @@
+{
+  "fetched_at": "2026-10-11T00:05:42Z",
+  "issue": {
+    "url": "https://github.com/newton-physics/newton/issues/4540",
+    "title": "[BUG] SolverSemiImplicit does not maintain rest pose of D6 joint with 2 angular dofs and non-zero ke on each dof",
+    "reporter": "gyeomannvidia",
+    "state": "open",
+    "reported_version": "Newton 1.7.0.dev0",
+    "verified_contract": "A D6 joint initialized at its rest pose should maintain that pose without external forces. The posted CPU reproducer uses angular axes Y/Z, coordinates and targets (0.2, 0.4), one 0.001-second SemiImplicit step, drive stiffness 2, zero gravity, and zero attachment/angular-damping gains; eval_ik recovers joint velocities with absolute 1e-8 tolerance. It also includes a zero-drive-gain control."
+  },
+  "pr": {
+    "url": "https://github.com/newton-physics/newton/pull/4600",
+    "title": "Fix SemiImplicit D6 drive angles for custom axes",
+    "owner": "VolodymyrLinuxovich",
+    "state": "open",
+    "draft": false,
+    "merged": false,
+    "head_sha": "c7a91b485e33ec489684c79b0deda2dd121c439f",
+    "api_base_sha": "0ce65ad9dbb8fc97d27613240c4f647d9eb4580d",
+    "commits": 1,
+    "changed_files": 3,
+    "additions": 46,
+    "deletions": 1,
+    "verified_description": "The stated correction rotates relative orientation into the two-axis joint frame before decomposition, matching invert_2d_rotational_dofs. The test plan covers three axis pairs and adjacent joint-drive/joint-limit CPU tests. The report links issue #4540 as the minimal reproduction."
+  },
+  "scope_result": "Primary descriptions match the frozen original witness and expanded oracle; no runtime scope change was needed."
+}
