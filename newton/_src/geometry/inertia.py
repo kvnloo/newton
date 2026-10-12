@@ -742,9 +742,15 @@ def compute_inertia_shape(
 
             c_new = wp.cw_mul(c, scale)
 
-            Ixx = I[0, 0] * (sy**2 + sz**2) / 2 * mass_ratio
-            Iyy = I[1, 1] * (sx**2 + sz**2) / 2 * mass_ratio
-            Izz = I[2, 2] * (sx**2 + sy**2) / 2 * mass_ratio
+            # Recover unscaled second moments, then apply the diagonal scale.
+            # Ixx*(sy^2+sz^2)/2 is exact only for uniform scale.
+            ixx, iyy, izz = float(I[0, 0]), float(I[1, 1]), float(I[2, 2])
+            int_x2 = 0.5 * (iyy + izz - ixx)
+            int_y2 = 0.5 * (ixx + izz - iyy)
+            int_z2 = 0.5 * (ixx + iyy - izz)
+            Ixx = mass_ratio * (sy**2 * int_y2 + sz**2 * int_z2)
+            Iyy = mass_ratio * (sx**2 * int_x2 + sz**2 * int_z2)
+            Izz = mass_ratio * (sx**2 * int_x2 + sy**2 * int_y2)
             # Products of inertia pick up the sign of the corresponding scale
             # pair, which is the correct mirror behavior under a single-axis
             # sign flip.
