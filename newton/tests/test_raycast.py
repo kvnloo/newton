@@ -163,6 +163,83 @@ def test_ray_intersect_cylinder(test: TestRaycast, device: str):
             test.assertAlmostEqual(out_t.numpy()[0], expected, delta=1e-5)
 
 
+def test_ray_intersect_cylinder_normals(test: TestRaycast, device: str):
+    """Select side and cap normals from the intersected cylinder surface."""
+    out_t = wp.zeros(1, dtype=float, device=device)
+    out_n = wp.zeros(1, dtype=wp.vec3, device=device)
+    identity = wp.transform_identity()
+    unit = wp.vec3(1.0, 1.0, 0.0)
+    cases = []
+    for sign in (-1.0, 1.0):
+        cases.extend(
+            [
+                (f"near_{sign}_cap_side", identity, unit, (2, 0, sign * (1 - 2**-22)), (-1, 0, 0), 1.0, (1, 0, 0)),
+                (f"{sign}_cap", identity, unit, (0, 0, 2 * sign), (0, 0, -sign), 1.0, (0, 0, sign)),
+                (f"inside_{sign}_cap", identity, unit, (0, 0, 0), (0, 0, sign), 1.0, (0, 0, sign)),
+                (f"{sign}_rim_tie", identity, unit, (2, 0, 2 * sign), (-1, 0, -sign), 1.0, (0, 0, sign)),
+            ]
+        )
+    thin = 2**-20
+    narrow = 1e-8
+    cases.extend(
+        [
+            ("side_center", identity, unit, (2, 0, 0), (-1, 0, 0), 1.0, (1, 0, 0)),
+            ("inside_side", identity, unit, (0, 0, 0), (1, 0, 0), 1.0, (1, 0, 0)),
+            ("thin_side", identity, wp.vec3(thin, thin, 0), (2 * thin, 0, 0), (-1, 0, 0), thin, (1, 0, 0)),
+            ("thin_top_cap", identity, wp.vec3(thin, thin, 0), (0, 0, 2 * thin), (0, 0, -1), thin, (0, 0, 1)),
+            ("narrow_top_cap", identity, wp.vec3(1, narrow, 0), (0, 0, 1), (0, 0, -1), 1.0, (0, 0, 1)),
+            ("narrow_bottom_cap", identity, wp.vec3(1, narrow, 0), (0, 0, -1), (0, 0, 1), 1.0, (0, 0, -1)),
+            (
+                "rotated_near_cap_side",
+                wp.transform(wp.vec3(0), wp.quat_from_axis_angle(wp.vec3(0, 0, 1), wp.pi / 2)),
+                unit,
+                (0, 2, 1 - 2**-22),
+                (0, -1, 0),
+                1.0,
+                (0, 1, 0),
+            ),
+        ]
+    )
+    for name, xform, size, origin, direction, expected_t, expected_n in cases:
+        with test.subTest(name):
+            wp.launch(
+                kernel_test_geom,
+                dim=1,
+                inputs=[out_t, out_n, xform, size, GeoType.CYLINDER, wp.vec3(*origin), wp.vec3(*direction), 0],
+                device=device,
+            )
+            test.assertAlmostEqual(out_t.numpy()[0], expected_t, delta=1e-6)
+            np.testing.assert_allclose(out_n.numpy()[0], expected_n, atol=1e-6)
+
+
+def test_intersect_ray_cylinder_side_normal(test: TestRaycast, device: str):
+    """Return the curved side normal through the public ray query."""
+    builder = newton.ModelBuilder()
+    builder.add_shape_cylinder(body=-1, radius=1.0, half_height=1.0)
+    model = builder.finalize(device=device)
+    origins = wp.array([[2.0, 0.0, 1.0 - 2**-22]], dtype=wp.vec3, device=device)
+    directions = wp.array([[-1.0, 0.0, 0.0]], dtype=wp.vec3, device=device)
+    worlds = wp.array([-1], dtype=wp.int32, device=device)
+    out_t = wp.empty(1, dtype=float, device=device)
+    out_n = wp.empty(1, dtype=wp.vec3, device=device)
+    out_shape = wp.empty(1, dtype=wp.int32, device=device)
+    for fast_math in (False, True):
+        with test.subTest(fast_math=fast_math):
+            newton.intersect_ray(
+                model,
+                ray_origins=origins,
+                ray_directions=directions,
+                ray_worlds=worlds,
+                out_dist=out_t,
+                out_normal=out_n,
+                out_shape_id=out_shape,
+                fast_math=fast_math,
+            )
+            test.assertEqual(out_t.numpy()[0], 1.0)
+            test.assertEqual(out_shape.numpy()[0], 0)
+            np.testing.assert_allclose(out_n.numpy()[0], [1.0, 0.0, 0.0], atol=1e-6)
+
+
 def test_ray_intersect_barrel_cylinder(test: TestRaycast, device: str):
     """Intersect barrel-cylinder sides, caps, and interior rays."""
     out_t = wp.zeros(1, dtype=float, device=device)
@@ -209,6 +286,56 @@ def test_ray_intersect_barrel_cylinder(test: TestRaycast, device: str):
                 device=device,
             )
             test.assertAlmostEqual(out_t.numpy()[0], expected, delta=2.0e-4)
+
+
+def test_ray_intersect_barrel_cylinder_rim_normals(test: TestRaycast, device: str):
+    """Return finite normals at the ends of the barrel side profile."""
+    out_t = wp.zeros(1, dtype=float, device=device)
+    out_n = wp.zeros(1, dtype=wp.vec3, device=device)
+    for size, expected_t in (
+        (wp.vec3(0.5, 1.0, 1.0), 1.5),
+        (wp.vec3(0.0, 1.0, 2.0), 2.0),
+        (wp.vec3(1e-4, 1.0, 2.0), 2.0),
+    ):
+        for sign in (-1.0, 1.0):
+            with test.subTest(size=size, sign=sign):
+                wp.launch(
+                    kernel_test_geom,
+                    dim=1,
+                    inputs=[
+                        out_t,
+                        out_n,
+                        wp.transform_identity(),
+                        size,
+                        GeoType.CYLINDER,
+                        wp.vec3(2.0, 0.0, sign),
+                        wp.vec3(-1.0, 0.0, 0.0),
+                        0,
+                    ],
+                    device=device,
+                )
+                test.assertAlmostEqual(out_t.numpy()[0], expected_t, delta=1e-6)
+                np.testing.assert_allclose(out_n.numpy()[0], [0.0, 0.0, sign], atol=1e-6)
+
+    for sign in (-1.0, 1.0):
+        with test.subTest(near_rim=sign):
+            wp.launch(
+                kernel_test_geom,
+                dim=1,
+                inputs=[
+                    out_t,
+                    out_n,
+                    wp.transform_identity(),
+                    wp.vec3(1e-4, 1.0, 2.0),
+                    GeoType.CYLINDER,
+                    wp.vec3(2.0, 0.0, sign * (1.0 - 2**-22)),
+                    wp.vec3(-1.0, 0.0, 0.0),
+                    0,
+                ],
+                device=device,
+            )
+            test.assertEqual(out_t.numpy()[0], 2.0)
+            np.testing.assert_allclose(out_n.numpy()[0], [0.0, 0.0, sign], atol=1e-6)
 
 
 def test_ray_intersect_cone(test: TestRaycast, device: str):
@@ -875,7 +1002,19 @@ add_function_test(TestRaycast, "test_ray_intersect_box", test_ray_intersect_box,
 add_function_test(TestRaycast, "test_ray_intersect_capsule", test_ray_intersect_capsule, devices=devices)
 add_function_test(TestRaycast, "test_ray_intersect_cylinder", test_ray_intersect_cylinder, devices=devices)
 add_function_test(
+    TestRaycast, "test_ray_intersect_cylinder_normals", test_ray_intersect_cylinder_normals, devices=devices
+)
+add_function_test(
+    TestRaycast, "test_intersect_ray_cylinder_side_normal", test_intersect_ray_cylinder_side_normal, devices=devices
+)
+add_function_test(
     TestRaycast, "test_ray_intersect_barrel_cylinder", test_ray_intersect_barrel_cylinder, devices=devices
+)
+add_function_test(
+    TestRaycast,
+    "test_ray_intersect_barrel_cylinder_rim_normals",
+    test_ray_intersect_barrel_cylinder_rim_normals,
+    devices=devices,
 )
 add_function_test(TestRaycast, "test_ray_intersect_cone", test_ray_intersect_cone, devices=devices)
 add_function_test(TestRaycast, "test_ray_intersect_ellipsoid", test_ray_intersect_ellipsoid, devices=devices)
