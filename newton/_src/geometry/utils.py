@@ -965,8 +965,7 @@ def remesh_mesh(
         remeshing_kwargs["maxhullvert"] = mesh.maxhullvert
     vertices, indices = remesh(mesh.vertices, mesh.indices.reshape(-1, 3), method=method, **remeshing_kwargs)
     if inplace:
-        mesh.vertices = vertices
-        mesh.indices = indices.flatten()
+        mesh._replace_geometry(vertices, indices)
         if recompute_inertia:
             mesh.mass, mesh.com, mesh.inertia, _ = compute_inertia_mesh(1.0, vertices, indices, is_solid=mesh.is_solid)
             if not mesh.is_solid:
