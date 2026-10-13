@@ -22,6 +22,95 @@ from newton.tests.unittest_utils import assert_np_equal
 
 
 class TestInertia(unittest.TestCase):
+    def test_hollow_mesh_inertia_respects_thickness_with_cache(self):
+        """Use requested hollow thickness even when unit mesh inertia is cached."""
+        # The closed unit-cube fixture from test_cube_mesh_inertia.
+        vertices = [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+        ]
+        indices = [
+            [1, 2, 3],
+            [7, 6, 5],
+            [4, 5, 1],
+            [5, 6, 2],
+            [2, 6, 7],
+            [0, 3, 7],
+            [0, 1, 3],
+            [4, 7, 5],
+            [0, 4, 1],
+            [1, 5, 2],
+            [3, 2, 7],
+            [4, 0, 7],
+        ]
+        cached = newton.Mesh(vertices, indices, is_solid=False, compute_inertia=True)
+        uncached = newton.Mesh(vertices, indices, is_solid=False, compute_inertia=False)
+        scale = wp.vec3(1.0, 1.0, 1.0)
+
+        for thickness, expected_mass in ((0.0, 0.0), (0.001, 0.012), (0.01, 0.12)):
+            with self.subTest(thickness=thickness):
+                direct = compute_inertia_mesh(1.0, vertices, indices, is_solid=False, thickness=thickness)
+                self.assertAlmostEqual(direct[0], expected_mass, delta=2e-6)
+                self.assertAlmostEqual(direct[3], expected_mass, delta=2e-6)
+                actual = compute_inertia_shape(GeoType.MESH, scale, cached, 1.0, False, thickness)
+                expected = compute_inertia_shape(GeoType.MESH, scale, uncached, 1.0, False, thickness)
+                self.assertAlmostEqual(actual[0], expected[0], delta=2e-6)
+                assert_np_equal(np.array(actual[1]), np.array(expected[1]), tol=1e-5)
+                assert_np_equal(np.array(actual[2]), np.array(expected[2]), tol=1e-5)
+
+        builder = newton.ModelBuilder()
+        body = builder.add_body()
+        builder.add_shape_mesh(
+            body,
+            mesh=cached,
+            cfg=newton.ModelBuilder.ShapeConfig(density=1.0, is_solid=False, margin=0.01),
+        )
+        self.assertAlmostEqual(builder.body_mass[body], 0.12, delta=2e-6)
+        assert_np_equal(np.array(builder.body_com[body]), np.array([0.5, 0.5, 0.5]), tol=1e-5)
+        expected_builder = compute_inertia_shape(GeoType.MESH, scale, uncached, 1.0, False, 0.01)
+        assert_np_equal(np.array(builder.body_inertia[body]), np.array(expected_builder[2]), tol=1e-5)
+
+        stretched = wp.vec3(2.0, 1.0, 1.0)
+        stretched_cached = compute_inertia_shape(GeoType.MESH, stretched, cached, 1.0, False, 0.001)
+        stretched_uncached = compute_inertia_shape(GeoType.MESH, stretched, uncached, 1.0, False, 0.001)
+        self.assertAlmostEqual(stretched_cached[0], stretched_uncached[0], delta=2e-6)
+        assert_np_equal(np.array(stretched_cached[1]), np.array(stretched_uncached[1]), tol=1e-5)
+        assert_np_equal(np.array(stretched_cached[2]), np.array(stretched_uncached[2]), tol=1e-5)
+
+        solid = newton.Mesh(vertices, indices, is_solid=True, compute_inertia=True)
+        solid_mass = compute_inertia_shape(GeoType.MESH, scale, solid, 1.0, True, 0.01)[0]
+        self.assertAlmostEqual(solid_mass, 1.0, delta=2e-6)
+
+        for copied in (
+            cached.copy(),
+            cached.copy(vertices=cached.vertices.copy()),
+            cached.copy(indices=cached.indices.copy()),
+        ):
+            copied_mass = compute_inertia_shape(GeoType.MESH, scale, copied, 1.0, False, 0.01)[0]
+            self.assertAlmostEqual(copied_mass, 0.12, delta=2e-6)
+
+        # A user override of the precomputed cache is intentional and stays usable.
+        cached.mass = 0.7
+        cached.com = wp.vec3(0.25, 0.5, 0.75)
+        cached.inertia = wp.mat33(np.eye(3) * 0.2)
+        manual = compute_inertia_shape(GeoType.MESH, scale, cached, 1.0, False, 0.01)
+        self.assertAlmostEqual(manual[0], 0.7, delta=1e-6)
+        assert_np_equal(np.array(manual[1]), np.array([0.25, 0.5, 0.75]), tol=1e-6)
+        assert_np_equal(np.array(manual[2]), np.eye(3) * 0.2, tol=1e-6)
+
+        uncached.has_inertia = True
+        uncached.mass, uncached.com, uncached.inertia = cached.mass, cached.com, cached.inertia
+        supplied = compute_inertia_shape(GeoType.MESH, scale, uncached, 1.0, False, 0.01)
+        self.assertAlmostEqual(supplied[0], 0.7, delta=1e-6)
+        assert_np_equal(np.array(supplied[1]), np.array(manual[1]), tol=1e-6)
+        assert_np_equal(np.array(supplied[2]), np.array(manual[2]), tol=1e-6)
+
     def test_cube_mesh_inertia(self):
         # Unit cube
         vertices = [

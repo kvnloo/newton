@@ -264,6 +264,10 @@ class Mesh:
             self.mass, self.com, self.inertia, _ = compute_inertia_mesh(
                 1.0, self._vertices, self._indices, is_solid=is_solid
             )
+            if not is_solid:
+                # Hollow mass properties use the default thickness. Keep a snapshot
+                # to distinguish them from user overrides at shape creation.
+                self._computed_inertia = (self.mass, np.array(self.com).copy(), np.array(self.inertia).copy())
         else:
             self.inertia = wp.mat33(np.eye(3))
             self.mass = 1.0
@@ -835,6 +839,8 @@ class Mesh:
             m.mass = self.mass
             m.com = self.com
             m.has_inertia = self.has_inertia
+            if hasattr(self, "_computed_inertia"):
+                m._computed_inertia = self._computed_inertia
         # Only carry mesh-topology-derived caches forward when the geometry
         # is unchanged. ``_collision_edges`` indexes the original vertex
         # array; reusing it after a vertex/index override would feed
@@ -1689,6 +1695,8 @@ class Mesh:
             hull_mesh.mass = self.mass
             hull_mesh.com = self.com
             hull_mesh.inertia = self.inertia
+            if hasattr(self, "_computed_inertia"):
+                hull_mesh._computed_inertia = self._computed_inertia
             return hull_mesh
 
     def _get_render_hash(self) -> int:
