@@ -194,6 +194,8 @@ def _deduplicate_convex_collision_mesh(source: Mesh) -> Mesh:
     collision_mesh.com = source.com
     collision_mesh.inertia = source.inertia
     collision_mesh.has_inertia = source.has_inertia
+    if hasattr(source, "_computed_inertia"):
+        collision_mesh._computed_inertia = source._computed_inertia
 
     if source._collision_edges is not None:
         collision_edges = vertex_remap[source._collision_edges]

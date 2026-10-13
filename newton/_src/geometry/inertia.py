@@ -725,7 +725,20 @@ def compute_inertia_shape(
         return 0.0, wp.vec3(), wp.mat33()
     elif type == GeoType.MESH or type == GeoType.CONVEX_MESH:
         assert src is not None, "src must be provided for mesh or convex hull shapes"
-        if src.has_inertia and src.mass > 0.0 and src.is_solid == is_solid:
+        use_cached = src.has_inertia and src.mass > 0.0 and src.is_solid == is_solid
+        cache_matches_hollow_shape = (
+            isinstance(thickness, (int, float)) and thickness == 0.001 and tuple(scale) == (1.0, 1.0, 1.0)
+        )
+        if use_cached and not is_solid and not cache_matches_hollow_shape:
+            computed = getattr(src, "_computed_inertia", None)
+            if computed is not None and (
+                src.mass == computed[0]
+                and np.array_equal(np.array(src.com), computed[1])
+                and np.array_equal(np.array(src.inertia), computed[2])
+            ):
+                # The cached hollow values were generated at the default thickness.
+                use_cached = False
+        if use_cached:
             m, c, I = src.mass, src.com, src.inertia
             scale = wp.vec3(scale)
             sx, sy, sz = scale
