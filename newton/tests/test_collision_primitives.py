@@ -693,6 +693,71 @@ class TestCollisionPrimitives(unittest.TestCase):
                 msg=f"Test case {i}: Point at +penetration_depth/2 not on capsule surface (error: {dist_to_capsule:.4f})",
             )
 
+    def test_sphere_capsule_short_segment_analytic(self):
+        """Preserve analytic sphere-capsule contacts across short segments."""
+        cases = []
+        for scale in (0.1, 1.0, 10.0):
+            for axis_sign in (-1.0, 1.0):
+                for height_fraction in (0.0, 0.5):
+                    z = 0.0005 * scale * height_fraction
+                    cases.append(
+                        (
+                            f"interior_{scale}_{axis_sign}_{height_fraction}",
+                            (0.0, 0.00045 * scale, z),
+                            axis_sign,
+                            0.0005 * scale,
+                            0.00025 * scale,
+                            -0.00005 * scale,
+                            (0.0, 0.000225 * scale, z),
+                            (0.0, -1.0, 0.0),
+                        )
+                    )
+        for axis_sign in (-1.0, 1.0):
+            cases.append(
+                (
+                    f"endpoint_{axis_sign}",
+                    (0.0, 0.0, 0.0012),
+                    axis_sign,
+                    0.0005,
+                    0.00025,
+                    0.0002,
+                    (0.0, 0.0, 0.00085),
+                    (0.0, 0.0, -1.0),
+                )
+            )
+        cases.append(
+            ("zero_length", (0.0, 0.00045, 0.0), 1.0, 0.0, 0.00025, -0.00005, (0.0, 0.000225, 0.0), (0.0, -1.0, 0.0))
+        )
+
+        count = len(cases)
+        distances = wp.zeros(count, dtype=float, device="cpu")
+        positions = wp.zeros(count, dtype=wp.vec3, device="cpu")
+        normals = wp.zeros(count, dtype=wp.vec3, device="cpu")
+        wp.launch(
+            test_sphere_capsule_kernel,
+            dim=count,
+            inputs=[
+                wp.array([case[1] for case in cases], dtype=wp.vec3, device="cpu"),
+                wp.array([case[4] for case in cases], dtype=float, device="cpu"),
+                wp.array([(0.0, 0.0, 0.0)] * count, dtype=wp.vec3, device="cpu"),
+                wp.array([(0.0, 0.0, case[2]) for case in cases], dtype=wp.vec3, device="cpu"),
+                wp.array([case[4] for case in cases], dtype=float, device="cpu"),
+                wp.array([case[3] for case in cases], dtype=float, device="cpu"),
+                distances,
+                positions,
+                normals,
+            ],
+            device="cpu",
+        )
+        distances_np = distances.numpy()
+        positions_np = positions.numpy()
+        normals_np = normals.numpy()
+        for i, (name, _, _, _, _, expected_dist, expected_pos, expected_normal) in enumerate(cases):
+            with self.subTest(name=name):
+                self.assertAlmostEqual(distances_np[i], expected_dist, delta=1e-7)
+                np.testing.assert_allclose(positions_np[i], expected_pos, atol=1e-7)
+                np.testing.assert_allclose(normals_np[i], expected_normal, atol=1e-5)
+
     def test_capsule_capsule(self):
         """Test capsule-capsule collision with analytical penetration depth validation.
 
