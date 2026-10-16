@@ -65,6 +65,28 @@ class TestSelection(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, "No articulations matching pattern"):
             ArticulationView(model, pattern=re.compile(r"/World/envs/env_[0-9]+/Robot_Z"))
 
+    def test_set_attribute_rejects_invalid_write_layout_before_launch(self):
+        """Reject mismatched value shapes and devices before launching an attribute write."""
+        builder = newton.ModelBuilder()
+        body = builder.add_link(label="robot/body")
+        joint = builder.add_joint_revolute(parent=-1, child=body, label="robot/joint")
+        builder.add_articulation([joint], label="robot")
+        model = builder.finalize(device="cpu")
+        control = model.control()
+        view = ArticulationView(model, "robot")
+
+        target = view.get_attribute("joint_target_q", control)
+        self.assertEqual(target.shape, (1, 1, 1))
+
+        wrong_shape = wp.zeros((1, 1, 2), dtype=target.dtype, device=model.device)
+        with self.assertRaisesRegex(ValueError, "Expected values shape"):
+            view.set_attribute("joint_target_q", control, wrong_shape)
+
+        if wp.is_cuda_available():
+            wrong_device = wp.zeros(target.shape, dtype=target.dtype, device="cuda:0")
+            with self.assertRaisesRegex(ValueError, "Expected values on device"):
+                view.set_attribute("joint_target_q", control, wrong_device)
+
     def test_articulation_selector_lists(self):
         builder = newton.ModelBuilder()
         for label in ["robot_a", "robot_b", "prop"]:
