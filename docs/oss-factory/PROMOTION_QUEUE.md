@@ -15,6 +15,13 @@
 
 **Policy:** https://github.com/kvnloo/oss-factory/blob/main/factory/PROMOTION_QUEUES.md. #130 retired Linear; explicit scoped human approval still required for any origin-facing write. No GPU or native tests were executed to create this documentation snapshot. No new worker claim. Do not reuse the stale Linear gate language in the archived material below.
 
+### #4775 — current-origin-main drift check (2026-10-17)
+
+- Origin `newton-physics/newton:main` at [`e50f0d0e5807c3b1b9ee0848c18eee25e77673e7`](https://github.com/newton-physics/newton/commit/e50f0d0e5807c3b1b9ee0848c18eee25e77673e7); authored [#4775](https://github.com/newton-physics/newton/pull/4775) remains `6b83930d9d00ac91db3645b8ce682d35c60b5740`, open/draft, mergeable. Comparing PR-head → current main reports `ahead_by=2, behind_by=4` (compare direction matters), **not yet a current-base test result**.
+- Exact blob readback: current main **and original PR base** `bd69b56dc00693976c2fea9bd89afd863178140c` share raycast implementation blob `413ad9daa4bda18c1fbe7686fec8d11080d356a4` and raycast test blob `12a20f5aee0022fb820a5b6fe3a36e031294a2b1`. The two relevant files did **not** change upstream since PR base; current main's other changes do not establish native head compatibility.
+- GitHub check status at `6b83930`: EasyCLA, pre-commit.ci, CodeRabbit success; [three PR-triggered Actions runs](https://github.com/newton-physics/newton/actions?query=branch%3Apromotion%2Fray-box-normal-minval-20261016) remain `action_required`. CodeRabbit's sole original inline thread resolved. **NOT_RUN here:** current-base native Warp CPU raycast/adjacent; CUDA; negative controls. No worker lease, origin post, CI approval, or default-branch merge claimed. Required next owner action: run native CPU raycast tests on #4775 exact head and record raw output; external workflow approval is maintainer-controlled.
+- Ownership remains with existing #4775 author; original Newton geometry authors nvtw, Daniela Hase, Mustafa H and Alain Denzler, previous donor and CodeRabbit reviewer retain credit.
+
 ## Lossless historical archive — original factory issue #66
 
 Archived snapshot: https://github.com/kvnloo/oss-factory/issues/66 (original remains authoritative for pre-migration provenance and is not deleted).
