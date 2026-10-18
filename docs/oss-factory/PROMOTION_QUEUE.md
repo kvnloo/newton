@@ -12,6 +12,24 @@
 
 Owner: ChatGPT / NewtonLandedCloseout. Scope: fork PRs #10, #12 and #9 only; reconcile exact current heads with already-merged origin #4330, #4355 and #4354, close only ordinary fully represented mirrors, preserve source branches and original evidence. No source/CI edits, tests, origin writes or merges. Claim expires 2026-10-18T09:30:00Z or releases at the result below; other Newton work is unclaimed by this receipt. Direct human assignment authorizes this bounded downstream coordination only. Goal lock: accepted-work closeout on these six exact PRs, not new patches or GPU qualification.
 
+<!-- oss-factory:v1
+{"id":"20261018-newton-accepted-mirrors-closeout-result","kind":"result","project":"newton","from":"chatgpt","to":["factory"],"status":"done","parent_id":"20261018-newton-accepted-mirrors-closeout","dedupe_key":"promotion-queue:newton-physics/newton","civ":{"city_id":"oss:newton"}}
+-->
+
+## LANDED — accepted mirror closeout, 2026-10-18
+
+**Bounded claim released.** Fresh full PR/comment/review reads found no live downstream work, lease, explicit retention request or canonical-carrier role on these three ordinary mirrors. Each was still open with zero conversation comments, submitted reviews and inline comments before its receipt. Current fork heads exactly equaled current accepted origin source heads. Origin state was independently verified `closed`, `merged=true`, with the exact merge commit fetched; all changed files' added/deleted lines match the accepted squash merge (3/3, 4/4, 3/3 files respectively). Whole-file blobs can differ where unrelated base changes were incorporated; this is not an unrepresented fork delta.
+
+| Original work / preserved evidence | Exact fork = origin source head | Verified canonical merge | Downstream disposition |
+|---|---|---|---|
+| [Fork #10](https://github.com/kvnloo/newton/pull/10), KAMINO backing-device sparse views; [origin #4330](https://github.com/newton-physics/newton/pull/4330), original issue #4242 | `e0c9a5b3a92e638bc63bd22aa4dbb3b1737270c4` | [`c807b70055da1fe69853c05f965c551337776e67`](https://github.com/newton-physics/newton/commit/c807b70055da1fe69853c05f965c551337776e67), merged 2026-10-09T13:05:29Z by chschuma-disney | **LANDED / fork CLOSED, not merged**; [closeout receipt](https://github.com/kvnloo/newton/pull/10#issuecomment-6247343396). Historical branch `fix/sparse-cuda-pointer-device` retained. |
+| [Fork #12](https://github.com/kvnloo/newton/pull/12), scalar sparse BLAS codegen; [origin #4355](https://github.com/newton-physics/newton/pull/4355), original issue #4243 | `6bf5d39eceaa904c77056d93013036c0c6a54baf` | [`8d31b2e12618899f14426375fd0ad1f94158fe5a`](https://github.com/newton-physics/newton/commit/8d31b2e12618899f14426375fd0ad1f94158fe5a), merged 2026-10-09T13:41:54Z by Guirec-Maloisel | **LANDED / fork CLOSED, not merged**; [closeout receipt](https://github.com/kvnloo/newton/pull/12#issuecomment-6247346109). Historical branch `fix/kamino-scalar-sparse-blocks` retained. |
+| [Fork #9](https://github.com/kvnloo/newton/pull/9), rotated-builder world-frame twists; [origin #4354](https://github.com/newton-physics/newton/pull/4354) | `4e65bdb2e586a5206cfd1b8d92f80946b6f5c7ce` | [`009158e62b862b3b9d829397d6db583515ae1271`](https://github.com/newton-physics/newton/commit/009158e62b862b3b9d829397d6db583515ae1271), merged 2026-10-04T03:29:29Z by eric-heiden | **LANDED / fork CLOSED, not merged**; [closeout receipt](https://github.com/kvnloo/newton/pull/9#issuecomment-6247348892). Historical branch `fix/builder-rotation-velocities` retained. |
+
+**Attribution:** Kevin Rajan / kvnloo remains original author. chschuma-disney supplied the accepted Warp-native slicing design and approved #4330; Guirec-Maloisel reorganized #4355 and retains its squash-commit co-author credit, with approval by Guirec-Maloisel and chschuma-disney; eric-heiden confirmed the rotated-twist requirement, requested the changelog and approved #4354. Original PR bodies, native reproduction receipts, reviews and source branches remain intact. The archived “still-open” inventory below is historical and superseded for these three entries only.
+
+**Evidence boundary:** GitHub metadata and source-delta reconciliation only; no build, lint, test, formatter, CI or GPU execution in this closeout. Historical native/CUDA claims remain attributed to their original receipts, not freshly reproduced or inferred from acceptance. No upstream write, merge, branch deletion, source/CI change or default-branch write. No retained/noneligible mirror among the assigned three. This existing documentation queue remains canonical; no new queue or claim on other work.
+
 ## Current owner-first triage (verified 2026-10-17)
 
 | Work | Current head and exact status | Action / provenance |
