@@ -4,6 +4,14 @@
 
 **Fork:** https://github.com/kvnloo/newton  ·  **Origin:** https://github.com/newton-physics/newton  ·  **Legacy complete record:** https://github.com/kvnloo/oss-factory/issues/66
 
+<!-- oss-factory:v1
+{"id":"20261018-newton-accepted-mirrors-closeout","kind":"receipt","project":"newton","from":"chatgpt","to":["factory"],"status":"claimed","dedupe_key":"promotion-queue:newton-physics/newton","civ":{"city_id":"oss:newton"}}
+-->
+
+## Bounded accepted-work closeout claim — 2026-10-18
+
+Owner: ChatGPT / NewtonLandedCloseout. Scope: fork PRs #10, #12 and #9 only; reconcile exact current heads with already-merged origin #4330, #4355 and #4354, close only ordinary fully represented mirrors, preserve source branches and original evidence. No source/CI edits, tests, origin writes or merges. Claim expires 2026-10-18T09:30:00Z or releases at the result below; other Newton work is unclaimed by this receipt. Direct human assignment authorizes this bounded downstream coordination only. Goal lock: accepted-work closeout on these six exact PRs, not new patches or GPU qualification.
+
 ## Current owner-first triage (verified 2026-10-17)
 
 | Work | Current head and exact status | Action / provenance |
