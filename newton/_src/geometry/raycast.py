@@ -401,6 +401,7 @@ def ray_intersect_cylinder(
     t_hit = -1.0
     normal = wp.vec3(0.0)
     min_t = 1.0e10
+    hit_cap = 0
     axial_scale = 0.0
     equatorial_radius = r
 
@@ -467,7 +468,9 @@ def ray_intersect_cylinder(
             x = ray_origin[0] + t_top * ray_direction[0]
             y = ray_origin[1] + t_top * ray_direction[1]
             if x * x + y * y <= r * r:
-                min_t = wp.min(min_t, t_top)
+                if t_top <= min_t:
+                    min_t = t_top
+                    hit_cap = 1
 
         # Bottom cap
         t_bot = (-h - ray_origin[2]) * inv_d_z
@@ -475,24 +478,29 @@ def ray_intersect_cylinder(
             x = ray_origin[0] + t_bot * ray_direction[0]
             y = ray_origin[1] + t_bot * ray_direction[1]
             if x * x + y * y <= r * r:
-                min_t = wp.min(min_t, t_bot)
+                if t_bot < min_t or (t_bot == min_t and (hit_cap == 0 or ray_direction[2] > 0.0)):
+                    min_t = t_bot
+                    hit_cap = -1
 
     if min_t < 1.0e9:
         t_hit = min_t
 
     if t_hit >= 0.0:
         hit_local = ray_origin + t_hit * ray_direction
-        z_clamped = wp.min(h, wp.max(-h, hit_local[2]))
-        if z_clamped >= (h - EPSILON) or z_clamped <= (-h + EPSILON):
-            normal_local = wp.vec3(0.0, 0.0, z_clamped)
+        if hit_cap != 0:
+            normal_local = wp.vec3(0.0, 0.0, float(hit_cap))
         elif barrel_radius > 0.0:
-            radial_length = wp.sqrt(hit_local[0] * hit_local[0] + hit_local[1] * hit_local[1])
-            circle_height = wp.sqrt(barrel_radius * barrel_radius - hit_local[2] * hit_local[2])
-            normal_local = wp.vec3(
-                hit_local[0] / radial_length,
-                hit_local[1] / radial_length,
-                hit_local[2] / circle_height,
-            )
+            z_clamped = wp.min(h, wp.max(-h, hit_local[2]))
+            if z_clamped >= (h - EPSILON) or z_clamped <= (-h + EPSILON):
+                normal_local = wp.vec3(0.0, 0.0, z_clamped)
+            else:
+                radial_length = wp.sqrt(hit_local[0] * hit_local[0] + hit_local[1] * hit_local[1])
+                circle_height = wp.sqrt(barrel_radius * barrel_radius - hit_local[2] * hit_local[2])
+                normal_local = wp.vec3(
+                    hit_local[0] / radial_length,
+                    hit_local[1] / radial_length,
+                    hit_local[2] / circle_height,
+                )
         else:
             normal_local = wp.vec3(hit_local[0], hit_local[1], axial_scale * hit_local[2])
         normal = wp.normalize(normal_local)
