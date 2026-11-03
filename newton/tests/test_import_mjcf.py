@@ -9587,6 +9587,63 @@ class TestMjcfPositionDampratioParsing(unittest.TestCase):
         self.assertAlmostEqual(float(biasprm[1, 2]), -3.0, places=6)
 
 
+    SINGLE_DRIVE_MJCF = """
+    <mujoco>
+        <worldbody>
+            <body name="link">
+                <joint name="hinge" type="hinge" axis="0 0 1"/>
+                <geom type="sphere" size="0.05" mass="1"/>
+            </body>
+        </worldbody>
+        <actuator>
+            <position name="motor" joint="hinge" {attributes}/>
+        </actuator>
+    </mujoco>
+    """
+
+    def test_joint_target_dampratio_reports_deferred_resolution(self):
+        """Warn about unresolved joint-target damping until the MuJoCo solver is constructed."""
+        xml = self.SINGLE_DRIVE_MJCF.format(attributes='kp="100" dampratio="1"')
+        builder = newton.ModelBuilder()
+        with self.assertLogs("newton._src.utils.import_mjcf", level="WARNING") as captured:
+            builder.add_mjcf(xml)
+        self.assertEqual(len(captured.records), 1)
+        message = captured.records[0].getMessage()
+        for token in ("motor", "dampratio=1.0", "joint_target_kd", "SolverMuJoCo"):
+            self.assertIn(token, message)
+
+        model = builder.finalize(device="cpu")
+        np.testing.assert_allclose(model.joint_target_ke.numpy(), [100.0])
+        np.testing.assert_array_equal(model.joint_target_kd.numpy(), [0.0])
+
+        # A unit-mass sphere of radius 0.05 has I_z = 2/5 * 1 * 0.05**2 = 0.001.
+        expected_kd = 2.0 * np.sqrt(100.0 * 0.001)
+        mujoco, _ = SolverMuJoCo.import_mujoco()
+        native = mujoco.MjModel.from_xml_string(xml)
+        np.testing.assert_allclose(-native.actuator_biasprm[0, 2], expected_kd, rtol=1e-5)
+
+        SolverMuJoCo(model, use_mujoco_cpu=True)
+        np.testing.assert_allclose(model.joint_target_kd.numpy(), [expected_kd], rtol=1e-5)
+
+    def test_joint_target_dampratio_warning_excludes_resolved_and_direct_drives(self):
+        """Keep explicitly damped, default, and direct position drives warning-free."""
+        cases = (
+            ("explicit_kv", 'kp="100" kv="3"', False, 3.0, -3.0),
+            ("kv_overrides_ratio", 'kp="100" kv="3" dampratio="1"', False, 3.0, -3.0),
+            ("neither", 'kp="100"', False, 0.0, 0.0),
+            ("direct_ratio", 'kp="100" dampratio="1"', True, 0.0, 1.0),
+        )
+        for name, attributes, ctrl_direct, expected_kd, expected_bias in cases:
+            with self.subTest(name=name):
+                xml = self.SINGLE_DRIVE_MJCF.format(attributes=attributes)
+                builder = newton.ModelBuilder()
+                with self.assertNoLogs("newton._src.utils.import_mjcf", level="WARNING"):
+                    builder.add_mjcf(xml, ctrl_direct=ctrl_direct)
+                model = builder.finalize(device="cpu")
+                np.testing.assert_allclose(model.joint_target_kd.numpy(), [expected_kd])
+                np.testing.assert_allclose(model.mujoco.actuator_biasprm.numpy()[0, 2], expected_bias)
+
+
 class TestActuatorDefaultKpKv(unittest.TestCase):
     """Regression: position/velocity actuators must default kp=1/kv=1.
 
