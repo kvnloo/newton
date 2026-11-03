@@ -60,6 +60,7 @@ class TestImportUsdD6NanJointLimits(unittest.TestCase):
         )
 
     def test_nan_limits_rejected_for_every_d6_axis_during_cpu_import(self):
+        """Reject NaN limits on both bounds of every USD D6 axis."""
         for axis in D6_AXES:
             for bound in ("lower", "upper"):
                 with self.subTest(axis=axis, bound=bound):
@@ -78,6 +79,7 @@ class TestImportUsdD6NanJointLimits(unittest.TestCase):
                         builder.finalize(device="cpu")
 
     def test_finite_d6_limits_preserve_axis_units_on_cpu(self):
+        """Preserve translational meters and rotational radians."""
         for axis in D6_AXES:
             with self.subTest(axis=axis):
                 if axis.startswith("trans"):
@@ -90,11 +92,12 @@ class TestImportUsdD6NanJointLimits(unittest.TestCase):
                 self.assertAlmostEqual(actual_lower, expected_lower, places=6)
                 self.assertAlmostEqual(actual_upper, expected_upper, places=6)
 
-    def test_infinite_d6_limits_remain_unbounded_on_cpu(self):
+    def test_infinite_d6_limits_use_newton_unbounded_sentinels_on_cpu(self):
+        """Map USD infinities to finite Newton unbounded-limit sentinels."""
         for axis in D6_AXES:
             with self.subTest(axis=axis):
                 lower, upper = self.import_axis_on_cpu(axis, -math.inf, math.inf)
-                self.assertTrue(math.isinf(lower))
+                self.assertEqual(lower, -newton.MAXVAL)
                 self.assertLess(lower, 0.0)
-                self.assertTrue(math.isinf(upper))
+                self.assertEqual(upper, newton.MAXVAL)
                 self.assertGreater(upper, 0.0)
