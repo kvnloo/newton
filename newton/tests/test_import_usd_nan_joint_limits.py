@@ -7,7 +7,6 @@ import math
 import unittest
 
 import newton
-from newton.tests.unittest_utils import USD_AVAILABLE
 
 
 class TestImportUsdNanJointLimits(unittest.TestCase):
@@ -34,7 +33,6 @@ class TestImportUsdNanJointLimits(unittest.TestCase):
         joint.CreateUpperLimitAttr(upper)
         return stage
 
-    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_nan_scalar_joint_limits_raise_during_import(self):
         for joint_type in ("revolute", "prismatic"):
             for bound in ("lower", "upper"):
@@ -48,7 +46,6 @@ class TestImportUsdNanJointLimits(unittest.TestCase):
                     ):
                         newton.ModelBuilder().add_usd(stage)
 
-    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_finite_scalar_joint_limits_preserve_units_on_cpu(self):
         cases = (
             ("revolute", -45.0, 45.0, -math.pi / 4.0, math.pi / 4.0),
