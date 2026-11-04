@@ -5245,9 +5245,9 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
 
         ``qpos`` / ``qvel`` are normally synced from the reset ``state`` at the
         start of the next :meth:`step`. When the deprecated ``update_data_interval``
-        is not 1, that per-step sync is disabled or sparse, so the reset joint
-        coordinates are pushed into ``qpos`` / ``qvel`` immediately for the
-        selected worlds.
+        is not 1, that per-step sync is disabled or sparse, so the current
+        joint coordinates are pushed into ``qpos`` / ``qvel`` immediately for
+        the selected worlds, even if ``flags=0`` leaves ``state`` unchanged.
         When sleeping is enabled, reset synchronizes immediately, rebuilds
         MuJoCo Warp's cached position- and velocity-dependent data, and restores
         the initial sleep state in the selected worlds.
@@ -5294,14 +5294,18 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                     ],
                     device=self.model.device,
                 )
-                # Without sleeping, the default update interval propagates the
-                # reset on the next step. Otherwise push it now so it is not
-                # lost before the next sync. The sleeping path synchronizes
-                # below before rebuilding its cached data.
-                if self._update_data_interval != 1 and not self.enable_sleeping:
-                    data = self.mj_data if self.use_mujoco_cpu else self.mjw_data
-                    if data is not None and native_template_world_selected:
-                        self._update_mjc_data(data, self.model, state, world_mask=world_mask)
+        # When imports are sparse or disabled, push the authored state now,
+        # including for flags=0 (which only clears solver history). Otherwise
+        # the next step may overwrite it with stale MuJoCo coordinates.
+        # Sleeping synchronizes separately before rebuilding cached data.
+        if (
+            self._update_data_interval != 1
+            and not self.enable_sleeping
+            and (self.model.joint_coord_count > 0 or self.model.joint_dof_count > 0)
+        ):
+            data = self.mj_data if self.use_mujoco_cpu else self.mjw_data
+            if data is not None and native_template_world_selected:
+                self._update_mjc_data(data, self.model, state, world_mask=world_mask)
 
         # Clear the internal buffers that persist between steps.
         if self.use_mujoco_cpu:
