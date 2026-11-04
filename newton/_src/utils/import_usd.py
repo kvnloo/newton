@@ -2628,7 +2628,9 @@ def parse_usd(
                 # NewtonMimicAPI's opt-out governs both spellings of the constraint.
                 # Validate only a resolved, active equality; the plain mimic loop skips
                 # MjcEqualityJointAPI prims.
-                eq_enabled = enabled and bool(usd.get_attribute(joint_prim, "newton:mimicEnabled", default=True))
+                eq_enabled = enabled and bool(
+                    usd.get_attribute(joint_prim, "newton:mimicEnabled", default=True)
+                )
                 if eq_enabled:
                     _reject_nan_equality_response(joint_prim)
                     coef0_name = (
