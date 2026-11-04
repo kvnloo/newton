@@ -535,15 +535,21 @@ class SchemaResolverMjc(SchemaResolver):
             "gravity_enabled": SchemaAttribute("mjc:flag:gravity", True),
         },
         PrimType.JOINT: {
-            "armature": SchemaAttribute("mjc:armature", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:armature")),
+            "armature": SchemaAttribute(
+                "mjc:armature", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:armature")
+            ),
             # MuJoCo damping is authored in SI units (per radian for angular
             # DOFs), unlike the USD per-degree convention behind the plain
             # "damping" key, so it resolves through the _per_rad variant.
             "damping_per_rad": SchemaAttribute("mjc:damping", None),
             "stiffness": SchemaAttribute("mjc:stiffness", None),
-            "springref": SchemaAttribute("mjc:springref", None, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:springref")),
+            "springref": SchemaAttribute(
+                "mjc:springref", None, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:springref")
+            ),
             "ref": SchemaAttribute("mjc:ref", None, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:ref")),
-            "friction": SchemaAttribute("mjc:frictionloss", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:frictionloss")),
+            "friction": SchemaAttribute(
+                "mjc:frictionloss", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:frictionloss")
+            ),
             "effort_limit": SchemaAttribute(
                 "mjc:actuatorfrcrange:min",
                 None,
