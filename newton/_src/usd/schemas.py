@@ -499,6 +499,11 @@ def _mjc_joint_effort_limit(prim: Usd.Prim) -> float | None:
         return None
     lower, upper = float(lower or 0.0), float(upper or 0.0)
     limited = usd.get_attribute(prim, "mjc:actuatorfrclimited", "auto")
+    if limited != "false":
+        if math.isnan(lower):
+            raise ValueError(f"USD joint {prim.GetPath()} has NaN mjc:actuatorfrcrange:min")
+        if math.isnan(upper):
+            raise ValueError(f"USD joint {prim.GetPath()} has NaN mjc:actuatorfrcrange:max")
     if limited == "true" or (limited == "auto" and lower < upper):
         return max(abs(lower), abs(upper))
     return None
