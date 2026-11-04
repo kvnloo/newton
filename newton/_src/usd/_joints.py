@@ -92,6 +92,9 @@ def _resolve_scalar_spring(
     else:
         springref = legacy_springref
     ref = custom_attrs.get("mujoco:dof_ref", None if ref is None else float(ref) * angle_scale)
+    for attr_name, value in (("mjc:springref", springref), ("mjc:ref", ref)):
+        if value is not None and not math.isfinite(value):
+            raise ValueError(f"USD joint {prim.GetPath()} has non-finite {attr_name}")
     rest_q = builder.default_joint_cfg.rest_q
     if springref is not None or ref is not None:
         rest_q = float(springref or 0.0) - float(ref or 0.0)
