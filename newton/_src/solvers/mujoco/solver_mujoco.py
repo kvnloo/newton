@@ -1519,6 +1519,17 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 return angle
             return angle * _mjc_angle_scale(context.get("physics_scene_prim"))
 
+        def parse_joint_numeric_usd(value: Any, context: dict[str, Any]) -> Any:
+            """Reject authored NaN MuJoCo joint-response parameters, preserving defaults and zero sentinels."""
+            from ...usd.utils import value_to_warp  # noqa: PLC0415
+
+            components = value if hasattr(value, "__len__") else (value,)
+            if any(math.isnan(float(component)) for component in components):
+                raise ValueError(
+                    f"USD joint {context['prim'].GetPath()} has NaN {context['attr'].usd_attribute_name}"
+                )
+            return value_to_warp(value, context["attr"].dtype)
+
         # region custom frequencies
         builder.add_custom_frequency(ModelBuilder.CustomFrequency(name="pair", namespace="mujoco"))
         builder.add_custom_frequency(
@@ -1725,6 +1736,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 default=0.0,
                 namespace="mujoco",
                 usd_attribute_name="mjc:margin",
+                usd_value_transformer=parse_joint_numeric_usd,
                 mjcf_attribute_name="margin",
             )
         )
@@ -1737,6 +1749,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 default=vec5(0.9, 0.95, 0.001, 0.5, 2.0),
                 namespace="mujoco",
                 usd_attribute_name="mjc:solimplimit",
+                usd_value_transformer=parse_joint_numeric_usd,
             )
         )
         builder.add_custom_attribute(
@@ -1750,6 +1763,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 default=wp.vec2(0.0, 0.0),
                 namespace="mujoco",
                 usd_attribute_name="mjc:solreflimit",
+                usd_value_transformer=parse_joint_numeric_usd,
                 mjcf_attribute_name="solreflimit",
             )
         )
@@ -1796,6 +1810,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 default=wp.vec2(0.02, 1.0),
                 namespace="mujoco",
                 usd_attribute_name="mjc:solreffriction",
+                usd_value_transformer=parse_joint_numeric_usd,
             )
         )
         builder.add_custom_attribute(
@@ -1807,6 +1822,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 default=vec5(0.9, 0.95, 0.001, 0.5, 2.0),
                 namespace="mujoco",
                 usd_attribute_name="mjc:solimpfriction",
+                usd_value_transformer=parse_joint_numeric_usd,
             )
         )
         builder.add_custom_attribute(

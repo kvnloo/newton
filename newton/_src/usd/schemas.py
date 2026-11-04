@@ -486,6 +486,18 @@ def _mjc_angle_scale(physics_scene_prim: Usd.Prim | None) -> float:
     return 1.0
 
 
+def _mjc_joint_scalar_without_nan(name: str):
+    """Read an active MuJoCo joint scalar, rejecting NaN without changing infinity handling."""
+
+    def _getter(prim: Usd.Prim) -> float | None:
+        value = usd.get_attribute(prim, name)
+        if value is not None and math.isnan(float(value)):
+            raise ValueError(f"USD joint {prim.GetPath()} has NaN {name}")
+        return value
+
+    return _getter
+
+
 def _mjc_joint_effort_limit(prim: Usd.Prim) -> float | None:
     """Read a joint effort limit [N or N·m] from MuJoCo ``mjc:actuatorfrcrange``.
 
@@ -499,6 +511,11 @@ def _mjc_joint_effort_limit(prim: Usd.Prim) -> float | None:
         return None
     lower, upper = float(lower or 0.0), float(upper or 0.0)
     limited = usd.get_attribute(prim, "mjc:actuatorfrclimited", "auto")
+    if limited != "false":
+        if math.isnan(lower):
+            raise ValueError(f"USD joint {prim.GetPath()} has NaN mjc:actuatorfrcrange:min")
+        if math.isnan(upper):
+            raise ValueError(f"USD joint {prim.GetPath()} has NaN mjc:actuatorfrcrange:max")
     if limited == "true" or (limited == "auto" and lower < upper):
         return max(abs(lower), abs(upper))
     return None
@@ -518,15 +535,21 @@ class SchemaResolverMjc(SchemaResolver):
             "gravity_enabled": SchemaAttribute("mjc:flag:gravity", True),
         },
         PrimType.JOINT: {
-            "armature": SchemaAttribute("mjc:armature", 0.0),
+            "armature": SchemaAttribute(
+                "mjc:armature", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:armature")
+            ),
             # MuJoCo damping is authored in SI units (per radian for angular
             # DOFs), unlike the USD per-degree convention behind the plain
             # "damping" key, so it resolves through the _per_rad variant.
             "damping_per_rad": SchemaAttribute("mjc:damping", None),
             "stiffness": SchemaAttribute("mjc:stiffness", None),
-            "springref": SchemaAttribute("mjc:springref", None),
-            "ref": SchemaAttribute("mjc:ref", None),
-            "friction": SchemaAttribute("mjc:frictionloss", 0.0),
+            "springref": SchemaAttribute(
+                "mjc:springref", None, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:springref")
+            ),
+            "ref": SchemaAttribute("mjc:ref", None, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:ref")),
+            "friction": SchemaAttribute(
+                "mjc:frictionloss", 0.0, usd_value_getter=_mjc_joint_scalar_without_nan("mjc:frictionloss")
+            ),
             "effort_limit": SchemaAttribute(
                 "mjc:actuatorfrcrange:min",
                 None,
