@@ -300,7 +300,6 @@ class TestMuJoCoReset(unittest.TestCase):
         np.testing.assert_allclose(result[0], qpos_synced[0], atol=1e-6)
         np.testing.assert_allclose(result[1], poisoned[1], atol=1e-6)
 
-
     def test_flags_zero_syncs_authored_state_with_sparse_imports_on_cpu(self):
         """Keep authored coordinates on masked reset when per-step imports are sparse."""
         model = _build_two_world_model(world_count=2, device="cpu")
