@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 AttributeFrequency = Model.AttributeFrequency
+
+
+def _validate_joint_drive(drive: Any, joint_path: str, *, axis: str | None = None) -> None:
+    """Reject NaN USD drive values before resolving actuator gains and targets."""
+    if not drive.enabled:
+        return
+
+    for attribute, value in (
+        ("stiffness", drive.stiffness),
+        ("damping", drive.damping),
+        ("maxForce", drive.forceLimit),
+        ("targetPosition", drive.targetPosition),
+        ("targetVelocity", drive.targetVelocity),
+    ):
+        if math.isnan(value):
+            axis_suffix = f" axis {axis}" if axis is not None else ""
+            raise ValueError(f"USD joint {joint_path}{axis_suffix} has NaN drive {attribute}")
 
 
 def _resolve_scalar_spring(
@@ -143,6 +161,21 @@ def parse_joint(
         return None
     key = joint_desc.type
     joint_path = str(joint_desc.primPath)
+    if key in (UsdPhysics.ObjectType.RevoluteJoint, UsdPhysics.ObjectType.PrismaticJoint):
+        _validate_joint_drive(joint_desc.drive, joint_path)
+    elif key == UsdPhysics.ObjectType.D6Joint:
+        axis_names = {
+            UsdPhysics.JointDOF.TransX: "transX",
+            UsdPhysics.JointDOF.TransY: "transY",
+            UsdPhysics.JointDOF.TransZ: "transZ",
+            UsdPhysics.JointDOF.RotX: "rotX",
+            UsdPhysics.JointDOF.RotY: "rotY",
+            UsdPhysics.JointDOF.RotZ: "rotZ",
+        }
+        for drive_pair in joint_desc.jointDrives:
+            axis_name = axis_names.get(drive_pair.first, str(drive_pair.first))
+            _validate_joint_drive(drive_pair.second, joint_path, axis=axis_name)
+
     joint_prim = stage.GetPrimAtPath(joint_desc.primPath)
     # collect engine-specific attributes on the joint prim if requested
     if collect_schema_attrs:
@@ -708,6 +741,7 @@ def parse_merged_joints(
             )
 
         is_revolute = key == UsdPhysics.ObjectType.RevoluteJoint
+        _validate_joint_drive(jd.drive, str(jd.primPath))
         dof = joint_properties.resolve_dof_params(
             jp_prim,
             jd,
