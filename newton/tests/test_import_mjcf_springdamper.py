@@ -44,7 +44,12 @@ class TestMjcfJointSpringdamper(unittest.TestCase):
                     np.testing.assert_allclose(model.joint_damping.numpy(), expected_d, rtol=1e-5)
                     np.testing.assert_allclose(solver.mj_model.jnt_stiffness, native.jnt_stiffness, rtol=1e-5)
                     np.testing.assert_allclose(solver.mj_model.dof_damping, native.dof_damping, rtol=1e-5)
-                    np.testing.assert_array_equal(model.mujoco.dof_springdamper.numpy(), 0.0)
+                    np.testing.assert_allclose(model.mujoco.dof_springdamper.numpy(), 0.0)
+                    if joint_type == "hinge" and native_cpu:
+                        model.joint_damping.assign([0.3])
+                        rebuilt = SolverMuJoCo(model, use_mujoco_cpu=True, disable_contacts=True)
+                        np.testing.assert_allclose(model.joint_damping.numpy(), [0.3], rtol=1e-5)
+                        np.testing.assert_allclose(rebuilt.mj_model.dof_damping, [0.3], rtol=1e-5)
 
     def test_inherited_and_disabled_springdamper(self):
         """Inherit time constants from defaults and preserve explicit gains if disabled."""
@@ -79,12 +84,7 @@ class TestMjcfJointSpringdamper(unittest.TestCase):
         SolverMuJoCo(model, use_mujoco_cpu=False, disable_contacts=True)
         np.testing.assert_allclose(model.joint_stiffness.numpy(), [0.008 / 0.09, 0.016 / 0.09], rtol=1e-5)
         np.testing.assert_allclose(model.joint_damping.numpy(), [0.08, 0.16], rtol=1e-5)
-        np.testing.assert_array_equal(model.mujoco.dof_springdamper.numpy(), 0.0)
-        damping = model.joint_damping.numpy()
-        damping[0] = 0.3
-        model.joint_damping.assign(damping)
-        SolverMuJoCo(model, use_mujoco_cpu=True, disable_contacts=True)
-        np.testing.assert_allclose(model.joint_damping.numpy(), [0.3, 0.16], rtol=1e-5)
+        np.testing.assert_allclose(model.mujoco.dof_springdamper.numpy(), 0.0)
 
 
 if __name__ == "__main__":

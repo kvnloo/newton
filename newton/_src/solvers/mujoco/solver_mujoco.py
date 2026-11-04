@@ -11323,6 +11323,10 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
         self.model.joint_damping.assign(damping)
         springdamper.assign(ratios)
         self.notify_model_changed(ModelFlags.JOINT_DOF_FORCE_PROPERTIES)
+        if not self.use_mujoco_cpu:
+            # Host MuJoCo fields are not updated by force-only MJWarp notifications.
+            self.mj_model.jnt_stiffness[:] = self.mjw_model.jnt_stiffness.numpy()[0]
+            self.mj_model.dof_damping[:] = self.mjw_model.dof_damping.numpy()[0]
 
     def _resolve_joint_target_damping(self, spec: Any, position_source_rows: dict[int, int]) -> None:
         """Resolve imported damping once, after publishing each world's inertia and gains."""
