@@ -2368,6 +2368,19 @@ def parse_usd(
         body_owner=_deformable_prims.body_owner,
     )
 
+    def _reject_nan_equality_value(joint_prim: Usd.Prim, attr_name: str, value: Any) -> None:
+        """Reject NaN in an active equality numeric without changing infinity semantics."""
+        if value is None:
+            return
+        components = (value,) if isinstance(value, (int, float)) else value
+        if any(math.isnan(float(component)) for component in components):
+            raise ValueError(f"MuJoCo equality '{joint_prim.GetPath()}': NaN in {attr_name}")
+
+    def _reject_nan_equality_response(joint_prim: Usd.Prim) -> None:
+        """Validate authored solver responses only for constraints that will be active."""
+        for attr_name in ("mjc:solref", "mjc:solimp"):
+            _reject_nan_equality_value(joint_prim, attr_name, usd.get_attribute(joint_prim, attr_name))
+
     def _resolve_newton_mimic(joint_prim: Usd.Prim) -> tuple[Sdf.Path | None, float, float]:
         """Resolve the mimic leader joint and coefficients from a follower joint prim.
 
@@ -2478,6 +2491,9 @@ def parse_usd(
                 if body0_info is None or body1_info is None:
                     continue
 
+                if enabled:
+                    _reject_nan_equality_response(joint_prim)
+
                 body0_idx, site0_local_pos = body0_info
                 body1_idx, site1_local_pos = body1_info
                 target0 = _get_first_target(joint_prim, "physics:body0")
@@ -2492,6 +2508,10 @@ def parse_usd(
                         if (_is_world_target(target0) or target0 in path_body_map)
                         else site0_local_pos
                     )
+                    if enabled:
+                        _reject_nan_equality_value(
+                            joint_prim, "equality anchor", (anchor[0], anchor[1], anchor[2])
+                        )
                     if convert_mjc_equality_constraints:
                         add_converted_loop_joint(
                             EqType.CONNECT,
@@ -2534,6 +2554,21 @@ def parse_usd(
                         float(torquescale_attr.Get()) if torquescale_attr and torquescale_attr.HasValue() else 1.0
                     )
                     relpose = wp.transform(relpose_pos, relpose_rot)
+                    if enabled:
+                        _reject_nan_equality_value(
+                            joint_prim, "equality anchor", (anchor[0], anchor[1], anchor[2])
+                        )
+                        _reject_nan_equality_value(
+                            joint_prim,
+                            "equality relative position",
+                            (relpose_pos[0], relpose_pos[1], relpose_pos[2]),
+                        )
+                        _reject_nan_equality_value(
+                            joint_prim,
+                            "equality relative orientation",
+                            (relpose_rot[0], relpose_rot[1], relpose_rot[2], relpose_rot[3]),
+                        )
+                        _reject_nan_equality_value(joint_prim, "mjc:torqueScale", torquescale)
                     if convert_mjc_equality_constraints:
                         add_converted_loop_joint(
                             EqType.WELD,
@@ -2590,16 +2625,36 @@ def parse_usd(
                     )
                     continue
 
+                # NewtonMimicAPI's opt-out governs both spellings of the constraint.
+                # Validate only a resolved, active equality; the plain mimic loop skips
+                # MjcEqualityJointAPI prims.
+                eq_enabled = enabled and bool(
+                    usd.get_attribute(joint_prim, "newton:mimicEnabled", default=True)
+                )
+                if eq_enabled:
+                    _reject_nan_equality_response(joint_prim)
+                    coef0_name = (
+                        "newton:mimicCoef0"
+                        if usd.get_attribute(joint_prim, "newton:mimicCoef0") is not None
+                        else "mjc:coef0"
+                    )
+                    coef1_name = (
+                        "newton:mimicCoef1"
+                        if usd.get_attribute(joint_prim, "newton:mimicCoef1") is not None
+                        else "mjc:coef1"
+                    )
+                    _reject_nan_equality_value(joint_prim, coef0_name, coef0)
+                    _reject_nan_equality_value(joint_prim, coef1_name, coef1)
+
                 # Only the constant and linear terms moved to NewtonMimicAPI; the
                 # higher-order polynomial terms remain MuJoCo-specific.
                 polycoef = [coef0, coef1]
                 for attr_name in ("mjc:coef2", "mjc:coef3", "mjc:coef4"):
-                    polycoef.append(float(usd.get_attribute(joint_prim, attr_name, default=0.0)))
+                    coefficient = float(usd.get_attribute(joint_prim, attr_name, default=0.0))
+                    if eq_enabled:
+                        _reject_nan_equality_value(joint_prim, attr_name, coefficient)
+                    polycoef.append(coefficient)
 
-                # NewtonMimicAPI's opt-out governs both spellings of the constraint. The
-                # plain mimic loop below skips these prims, so it is folded into the
-                # runtime enabled flag here rather than dropping the constraint.
-                eq_enabled = enabled and bool(usd.get_attribute(joint_prim, "newton:mimicEnabled", default=True))
 
                 if convert_mjc_equality_constraints:
                     if mjc_polycoef_has_higher_order(polycoef):
