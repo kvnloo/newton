@@ -14,7 +14,7 @@ from newton.exceptions import NewtonDeprecationWarning
 from newton.solvers import SolverMuJoCo
 
 
-def _build_two_world_model(world_count: int = 2) -> newton.Model:
+def _build_two_world_model(world_count: int = 2, *, device: str | None = None) -> newton.Model:
     """Build a model of ``world_count`` identical free + revolute articulations."""
     template = newton.ModelBuilder()
     body0 = template.add_link(mass=0.2, xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()))
@@ -36,7 +36,7 @@ def _build_two_world_model(world_count: int = 2) -> newton.Model:
     builder.add_ground_plane()
     for i in range(world_count):
         builder.add_world(template, xform=wp.transform((i * 2.0, 0.0, 0.0), wp.quat_identity()))
-    return builder.finalize()
+    return builder.finalize(device=device)
 
 
 class TestMuJoCoReset(unittest.TestCase):
@@ -299,6 +299,49 @@ class TestMuJoCoReset(unittest.TestCase):
         result = solver.mjw_data.qpos.numpy()
         np.testing.assert_allclose(result[0], qpos_synced[0], atol=1e-6)
         np.testing.assert_allclose(result[1], poisoned[1], atol=1e-6)
+
+
+    def test_flags_zero_syncs_authored_state_with_sparse_imports_on_cpu(self):
+        """Keep authored coordinates on masked reset when per-step imports are sparse."""
+        model = _build_two_world_model(world_count=2, device="cpu")
+        state = model.state()
+        coord_stride = model.joint_coord_count // model.world_count
+        dof_stride = model.joint_dof_count // model.world_count
+
+        # Exercise distinct authored joint coordinates and velocities per world.
+        q = state.joint_q.numpy().copy()
+        qd = state.joint_qd.numpy().copy()
+        q[coord_stride - 1], q[2 * coord_stride - 1] = 0.25, -0.5
+        qd[dof_stride - 1], qd[2 * dof_stride - 1] = 0.75, -1.25
+        state.joint_q.assign(q)
+        state.joint_qd.assign(qd)
+        mask = wp.array((True, False, False), dtype=wp.bool, device=model.device)
+
+        for interval in (0, 2):
+            with self.subTest(update_data_interval=interval):
+                with self.assertWarns(NewtonDeprecationWarning):
+                    solver = SolverMuJoCo(model, iterations=2, ls_iterations=2, update_data_interval=interval)
+
+                # Save the real Newton -> MuJoCo conversion as the expected
+                # selected-world coordinates; do not assume free-joint layout.
+                solver._update_mjc_data(solver.mjw_data, model, state)
+                expected_qpos = solver.mjw_data.qpos.numpy().copy()
+                expected_qvel = solver.mjw_data.qvel.numpy().copy()
+                poisoned_qpos = expected_qpos + np.array(((10.0,), (20.0,)), dtype=np.float32)
+                poisoned_qvel = expected_qvel + np.array(((30.0,), (40.0,)), dtype=np.float32)
+                solver.mjw_data.qpos.assign(poisoned_qpos)
+                solver.mjw_data.qvel.assign(poisoned_qvel)
+
+                solver.reset(state, world_mask=mask, flags=0)
+
+                # flags=0 must not restore any Newton joint defaults.
+                np.testing.assert_array_equal(state.joint_q.numpy(), q)
+                np.testing.assert_array_equal(state.joint_qd.numpy(), qd)
+                # The selected row must sync now; the other row is untouched.
+                np.testing.assert_allclose(solver.mjw_data.qpos.numpy()[0], expected_qpos[0], atol=1e-6)
+                np.testing.assert_allclose(solver.mjw_data.qvel.numpy()[0], expected_qvel[0], atol=1e-6)
+                np.testing.assert_array_equal(solver.mjw_data.qpos.numpy()[1], poisoned_qpos[1])
+                np.testing.assert_array_equal(solver.mjw_data.qvel.numpy()[1], poisoned_qvel[1])
 
 
 if __name__ == "__main__":
