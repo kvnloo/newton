@@ -541,6 +541,53 @@ def test_lbfgs_line_search_costs(test, device):
         test.assertLess(1.0 - np.cos(q), 1.0 - np.cos(q0))
 
 
+def test_lbfgs_history_curvature_scale(test, device):
+    """Use the most recent accepted curvature pair for each batch row."""
+    with wp.ScopedDevice(device):
+        model = _build_two_link_planar(device)
+        targets = wp.array([[1.5, 0.5, 0.0]] * 4, dtype=wp.vec3, device=device)
+        objective = ik.IKObjectivePosition(1, wp.vec3(0.5, 0.0, 0.0), targets)
+        optimizer = ik.IKOptimizerLBFGS(
+            model,
+            4,
+            [objective],
+            jacobian_mode=ik.IKJacobianType.ANALYTIC,
+            history_len=2,
+            h0_scale=0.5,
+        )
+
+        # Gradients are orthogonal to the stored correction pairs, so both
+        # L-BFGS loops leave the second DOF unchanged apart from H0 scaling.
+        gradient = np.zeros((4, 2), dtype=np.float32)
+        gradient[:, 1] = 1.0
+        steps = np.zeros((4, 2, 2), dtype=np.float32)
+        steps[1:, 0, 0] = 1.0
+        steps[3, 1, 0] = 1.0
+        changes = np.zeros_like(steps)
+        changes[1, 0, 0] = 2.0
+        changes[2, 0, 0] = 0.5
+        changes[3, 0, 0] = 4.0
+        changes[3, 1, 0] = 2.0
+        rho = np.zeros((4, 2), dtype=np.float32)
+        rho[1, 0] = 0.5
+        rho[2, 0] = 2.0
+        rho[3] = [0.25, 0.5]
+
+        optimizer.gradient.assign(gradient)
+        optimizer.s_history.assign(steps)
+        optimizer.y_history.assign(changes)
+        optimizer.rho_history.assign(rho)
+        optimizer.history_count.assign(np.array([0, 1, 1, 2], dtype=np.int32))
+        optimizer.history_start.assign(np.array([0, 0, 0, 1], dtype=np.int32))
+        optimizer._compute_search_direction()
+
+        # Row 3's newest pair is slot 0 after a circular-history wrap.
+        # H0 scales: 0.5 (empty), 0.5*(2/4), 0.5*(0.5/0.25),
+        # and 0.5*(4/16) (wrapped).
+        expected = np.array([[0.0, -0.5], [0.0, -0.25], [0.0, -1.0], [0.0, -0.125]])
+        np.testing.assert_allclose(optimizer.search_direction.numpy(), expected, rtol=0.0, atol=1e-6)
+
+
 # Test registration
 devices = get_test_devices()
 cuda_devices = get_selected_cuda_test_devices()
@@ -552,6 +599,7 @@ class TestLBFGSIK(unittest.TestCase):
 
 # Register L-BFGS convergence tests
 add_function_test(TestLBFGSIK, "test_lbfgs_line_search_costs", test_lbfgs_line_search_costs, devices)
+add_function_test(TestLBFGSIK, "test_lbfgs_history_curvature_scale", test_lbfgs_history_curvature_scale, devices)
 add_function_test(TestLBFGSIK, "test_lbfgs_convergence_autodiff", test_lbfgs_convergence_autodiff, devices)
 add_function_test(TestLBFGSIK, "test_lbfgs_convergence_analytic", test_lbfgs_convergence_analytic, devices)
 add_function_test(TestLBFGSIK, "test_lbfgs_convergence_mixed", test_lbfgs_convergence_mixed, devices)
