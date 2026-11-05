@@ -102,7 +102,6 @@ class TestComputeVertexNormals(unittest.TestCase):
                         compute_vertex_normals(points, indices)
 
 
-
 class TestMeshAdjacencyDiagnostics(unittest.TestCase):
     """Keep malformed-mesh diagnostics without noisy construction warnings."""
 
