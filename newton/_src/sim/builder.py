@@ -6828,7 +6828,7 @@ class ModelBuilder:
         return joint_index
 
     def _init_joint_q_from_body_poses(self, joint_id: int, parent: int, child: int) -> None:
-        """Initialize q7 from body poses so FK preserves the authored child pose."""
+        """Initialize a FREE joint and its default target from the body poses."""
         q_start = self.joint_q_start[joint_id]
         parent_body_xform = wp.transform_identity() if parent == -1 else self.body_q[parent]
         # Compute inverse(parent_body * parent_anchor) * child_body * child_anchor.
@@ -6837,6 +6837,7 @@ class ModelBuilder:
             transform_multiply(transform_inverse(anchor), self.body_q[child]), self.joint_X_c[joint_id]
         )
         self.joint_q[q_start : q_start + 7] = list(joint_q)
+        self.joint_target_q[q_start : q_start + 7] = list(joint_q)
 
     def add_joint_free(
         self,
