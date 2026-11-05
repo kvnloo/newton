@@ -9,14 +9,15 @@ import warnings
 import newton
 from newton.exceptions import NewtonWarning
 from newton.usd import SchemaResolverNewton, SchemaResolverPhysx
-from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 
 
 class TestPhysxJointFrictionWarning(unittest.TestCase):
     @staticmethod
     def make_stage(
-        joint_type, *, physx_friction: float | None = None, newton_friction: float | None = None
-    ) -> Usd.Stage:
+        joint_type: str, *, physx_friction: float | None = None, newton_friction: float | None = None
+    ):
+        from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+
         stage = Usd.Stage.CreateInMemory()
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
         root = UsdGeom.Xform.Define(stage, "/World")
@@ -26,7 +27,8 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
             UsdPhysics.RigidBodyAPI.Apply(body.GetPrim())
             UsdPhysics.CollisionAPI.Apply(body.GetPrim())
 
-        joint = joint_type.Define(stage, "/World/Joint")
+        schema = {"revolute": UsdPhysics.RevoluteJoint, "prismatic": UsdPhysics.PrismaticJoint}[joint_type]
+        joint = schema.Define(stage, "/World/Joint")
         joint.CreateBody0Rel().SetTargets(["/World/Parent"])
         joint.CreateBody1Rel().SetTargets(["/World/Child"])
         if physx_friction is not None:
@@ -36,7 +38,7 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
         return stage
 
     @staticmethod
-    def import_friction(stage: Usd.Stage, resolvers) -> float:
+    def import_friction(stage, resolvers) -> float:
         builder = newton.ModelBuilder()
         builder.default_joint_cfg.friction = 0.125
         builder.add_usd(stage, schema_resolvers=resolvers)
@@ -45,9 +47,9 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
 
     def test_authored_physx_joint_friction_warns_without_false_conversion(self):
         """A dimensionless PhysX coefficient cannot become an absolute N or Nm limit."""
-        for kind, joint_type in (("revolute", UsdPhysics.RevoluteJoint), ("prismatic", UsdPhysics.PrismaticJoint)):
+        for kind in ("revolute", "prismatic"):
             with self.subTest(kind=kind):
-                stage = self.make_stage(joint_type, physx_friction=0.75)
+                stage = self.make_stage(kind, physx_friction=0.75)
                 with self.assertWarnsRegex(
                     NewtonWarning, r"/World/Joint.*physxJoint:jointFriction.*load-dependent"
                 ):
@@ -56,7 +58,7 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
                 self.assertNotAlmostEqual(friction, 0.75)
 
     def test_unset_physx_joint_friction_does_not_warn(self):
-        stage = self.make_stage(UsdPhysics.RevoluteJoint)
+        stage = self.make_stage("revolute")
         with warnings.catch_warnings(record=True) as seen:
             warnings.simplefilter("always", NewtonWarning)
             friction = self.import_friction(stage, [SchemaResolverPhysx()])
@@ -70,7 +72,7 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
 
     def test_explicit_newton_friction_takes_precedence_without_warning(self):
         stage = self.make_stage(
-            UsdPhysics.RevoluteJoint,
+            "revolute",
             physx_friction=0.75,
             newton_friction=0.25,
         )
