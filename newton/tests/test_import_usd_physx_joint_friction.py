@@ -13,9 +13,7 @@ from newton.usd import SchemaResolverNewton, SchemaResolverPhysx
 
 class TestPhysxJointFrictionWarning(unittest.TestCase):
     @staticmethod
-    def make_stage(
-        joint_type: str, *, physx_friction: float | None = None, newton_friction: float | None = None
-    ):
+    def make_stage(joint_type: str, *, physx_friction: float | None = None, newton_friction: float | None = None):
         from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 
         stage = Usd.Stage.CreateInMemory()
@@ -50,9 +48,7 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
         for kind in ("revolute", "prismatic"):
             with self.subTest(kind=kind):
                 stage = self.make_stage(kind, physx_friction=0.75)
-                with self.assertWarnsRegex(
-                    NewtonWarning, r"/World/Joint.*physxJoint:jointFriction.*load-dependent"
-                ):
+                with self.assertWarnsRegex(NewtonWarning, r"/World/Joint.*physxJoint:jointFriction.*load-dependent"):
                     friction = self.import_friction(stage, [SchemaResolverPhysx()])
                 self.assertAlmostEqual(friction, 0.125)
                 self.assertNotAlmostEqual(friction, 0.75)
@@ -71,11 +67,7 @@ class TestPhysxJointFrictionWarning(unittest.TestCase):
         )
 
     def test_explicit_newton_friction_takes_precedence_without_warning(self):
-        stage = self.make_stage(
-            "revolute",
-            physx_friction=0.75,
-            newton_friction=0.25,
-        )
+        stage = self.make_stage("revolute", physx_friction=0.75, newton_friction=0.25)
         with warnings.catch_warnings(record=True) as seen:
             warnings.simplefilter("always", NewtonWarning)
             friction = self.import_friction(stage, [SchemaResolverNewton(), SchemaResolverPhysx()])
