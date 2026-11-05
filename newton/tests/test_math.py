@@ -28,6 +28,20 @@ def _inside_limits_kernel(
     result[i] = newton.math.vec_inside_limits(a[i], lower[i], upper[i])
 
 
+@wp.kernel
+def _quat_velocity_kernel(
+    now: wp.array[wp.quat], previous: wp.array[wp.quat], dt: float, result: wp.array[wp.vec3]
+):
+    i = wp.tid()
+    result[i] = newton.math.quat_velocity(now[i], previous[i], dt)
+
+
+@wp.kernel
+def _quat_velocity_x_kernel(now: wp.array[wp.quat], previous: wp.array[wp.quat], result: wp.array[float]):
+    velocity = newton.math.quat_velocity(now[0], previous[0], 0.5)
+    result[0] = velocity[0]
+
+
 class TestMathVectorPredicates(unittest.TestCase):
     """Check finite boundaries and unordered values in vector predicates."""
 
@@ -119,6 +133,53 @@ class TestMathVectorPredicates(unittest.TestCase):
                     device=device,
                 )
                 np.testing.assert_array_equal(result.numpy(), expected)
+
+
+class TestMathQuaternionVelocity(unittest.TestCase):
+    """Check small-angle quaternion velocities and gradients on CPU."""
+
+    def test_zero_tiny_and_quarter_turn_cpu(self):
+        """Preserve a subnormal angle without disturbing finite rotations."""
+        half_sqrt = np.sqrt(0.5)
+        now = np.array(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, -1.0],
+                [1.0e-24, 0.0, 0.0, 1.0],
+                [0.0, 0.0, half_sqrt, half_sqrt],
+            ],
+            dtype=np.float32,
+        )
+        previous = np.tile(np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32), (len(now), 1))
+        result = wp.empty(len(now), dtype=wp.vec3, device="cpu")
+        wp.launch(
+            _quat_velocity_kernel,
+            dim=len(now),
+            inputs=[wp.array(now, dtype=wp.quat, device="cpu"), wp.array(previous, dtype=wp.quat, device="cpu"), 0.5],
+            outputs=[result],
+            device="cpu",
+        )
+        actual = result.numpy()
+        np.testing.assert_allclose(actual[[0, 1]], 0.0, rtol=0.0, atol=1.0e-7)
+        # 2 * (1e-24) / 0.5 = 4e-24 rad/s. The baseline's vector norm squares
+        # 1e-24 to 1e-48, which underflows float32 and returns zero instead.
+        np.testing.assert_allclose(actual[2], [4.0e-24, 0.0, 0.0], rtol=1.0e-5, atol=1.0e-27)
+        np.testing.assert_allclose(actual[3], [0.0, 0.0, np.pi], rtol=1.0e-5, atol=1.0e-6)
+
+    def test_tiny_rotation_gradient_cpu(self):
+        """The angular-velocity derivative must stay finite near identity."""
+        now = wp.array([[5.0e-14, 0.0, 0.0, 1.0]], dtype=wp.quat, requires_grad=True, device="cpu")
+        previous = wp.array([[0.0, 0.0, 0.0, 1.0]], dtype=wp.quat, device="cpu")
+        result = wp.zeros(1, dtype=wp.float32, requires_grad=True, device="cpu")
+        with wp.Tape() as tape:
+            wp.launch(_quat_velocity_x_kernel, dim=1, inputs=[now, previous], outputs=[result], device="cpu")
+        tape.backward(loss=result)
+
+        # 2 * (5e-14) / 0.5 = 2e-13; d(omega_x)/d(q_now.x) = 2 / 0.5 = 4.
+        np.testing.assert_allclose(result.numpy(), [2.0e-13], rtol=1.0e-5, atol=1.0e-17)
+        gradient = now.grad.numpy()
+        self.assertTrue(np.isfinite(gradient).all())
+        np.testing.assert_allclose(gradient[0, 0], 4.0, rtol=1.0e-4, atol=1.0e-3)
 
 
 if __name__ == "__main__":
