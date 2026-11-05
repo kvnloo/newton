@@ -4,12 +4,14 @@
 """Tests for shared mesh utilities."""
 
 import unittest
+import warnings
 
 import numpy as np
 import warp as wp
 
 import newton
-from newton._src.utils.mesh import compute_vertex_normals
+from newton._src.utils.mesh import MeshAdjacency, compute_vertex_normals
+from newton.exceptions import NewtonWarning
 from newton.tests.unittest_utils import get_test_devices
 
 
@@ -98,6 +100,28 @@ class TestComputeVertexNormals(unittest.TestCase):
                 with self.subTest(layout=layout, points=name):
                     with self.assertRaisesRegex(ValueError, "indices must be flat or \\(N, 3\\) for NumPy inputs"):
                         compute_vertex_normals(points, indices)
+
+
+
+class TestMeshAdjacencyDiagnostics(unittest.TestCase):
+    """Keep malformed-mesh diagnostics without noisy construction warnings."""
+
+    def test_non_manifold_edge_logs_debug_without_warning_on_cpu(self):
+        """Three faces sharing one edge emit a debug record, not a warning."""
+        triangles = np.array(
+            [[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+            dtype=np.int32,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NewtonWarning)
+            with self.assertLogs("newton._src.utils.mesh", level="DEBUG") as captured:
+                adjacency = MeshAdjacency(triangles)
+
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].getMessage(), "Detected non-manifold edge")
+        self.assertEqual(len(adjacency.edge_indices), 7)
+        np.testing.assert_array_equal(adjacency.edge_tri_indices[0], [0, 1])
+        np.testing.assert_array_equal(adjacency.tri_edge_indices[:, 0], [0, 0, 0])
 
 
 class TestPrimitiveMeshes(unittest.TestCase):
