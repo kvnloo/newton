@@ -3152,6 +3152,137 @@ def _bending_force_is_scale_free(test, device):
     np.testing.assert_array_equal(hessians_np[-2:], 0.0)
 
 
+
+def _evaluate_bending_hinges_cpu(hinges, anchors, length, device):
+    """Evaluate actual VBD bending outputs for current and previous CPU hinge positions."""
+    count = len(hinges)
+    with wp.ScopedDevice(device):
+        pos = wp.array(np.asarray(hinges, dtype=np.float32).reshape(-1, 3), dtype=wp.vec3, device=device)
+        pos_anchor = wp.array(np.asarray(anchors, dtype=np.float32).reshape(-1, 3), dtype=wp.vec3, device=device)
+        indices = wp.array(np.arange(4 * count, dtype=np.int32).reshape(count, 4), dtype=wp.int32, device=device)
+        rest_angle = wp.zeros(count, dtype=float, device=device)
+        rest_length = wp.array([length] * count, dtype=float, device=device)
+        forces = wp.zeros(4 * count, dtype=wp.vec3, device=device)
+        hessians = wp.zeros(4 * count, dtype=wp.mat33, device=device)
+        wp.launch(
+            _eval_bending_hinge_kernel,
+            dim=(count, 4),
+            inputs=[pos, pos_anchor, indices, rest_angle, rest_length],
+            outputs=[forces, hessians],
+            device=device,
+        )
+        return (
+            forces.numpy().reshape(count, 4, 3).astype(np.float64),
+            hessians.numpy().reshape(count, 4, 3, 3).astype(np.float64),
+        )
+
+
+def _bending_relative_area_brackets_cpu(test, device):
+    """Verify each VBD face normal rejects just below and accepts just above the relative area cutoff."""
+    length = 5.0e-4
+    angle = math.pi / 6.0
+    ratios = (0.75e-6, 1.25e-6)
+    current = np.array(
+        [
+            [0.0, length * math.cos(angle), length * math.sin(angle)],
+            [0.0, -length, 0.0],
+            [0.0, 0.0, 0.0],
+            [length, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    hinges = []
+    for apex in (0, 1):
+        for ratio in ratios:
+            hinge = current.copy()
+            hinge[apex] *= ratio
+            hinges.append(hinge)
+
+    forces, hessians = _evaluate_bending_hinges_cpu(hinges, hinges, length, device)
+    for apex in (0, 1):
+        with test.subTest(apex=apex):
+            below = 2 * apex
+            above = below + 1
+            np.testing.assert_array_equal(forces[below], 0.0)
+            np.testing.assert_array_equal(hessians[below], 0.0)
+            test.assertTrue(np.isfinite(forces[above]).all())
+            test.assertTrue(np.isfinite(hessians[above]).all())
+
+            # |n| / |e|^2 = 1.25e-6; |grad(theta)_0| = 1/(ratio * length)
+            # for apex 0 and 1/length for apex 1. The equal-position anchor
+            # contributes no damping force, but doubles the elastic Hessian.
+            height_ratio = ratios[1] if apex == 0 else 1.0
+            expected_force = angle / height_ratio
+            expected_trace = 2.0 / (length * height_ratio**2)
+            test.assertAlmostEqual(
+                float(np.linalg.norm(forces[above, 0])), expected_force, delta=0.01 * expected_force
+            )
+            test.assertAlmostEqual(
+                float(np.trace(hessians[above, 0])), expected_trace, delta=0.02 * expected_trace
+            )
+
+
+def _bending_displaced_anchor_damping_cpu(test, device):
+    """Verify CPU damping force and Hessian with independently displaced previous-step apexes."""
+    length = 5.0e-4
+    current_angle = math.pi / 6.0
+    anchor_angle0 = math.radians(10.0)
+    anchor_angle1 = math.radians(-5.0)
+    ratios = (0.75e-6, 1.25e-6)
+    current = np.array(
+        [
+            [0.0, length * math.cos(current_angle), length * math.sin(current_angle)],
+            [0.0, -length, 0.0],
+            [0.0, 0.0, 0.0],
+            [length, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    previous = np.array(
+        [
+            [0.0, length * math.cos(anchor_angle0), length * math.sin(anchor_angle0)],
+            [0.0, -length * math.cos(anchor_angle1), -length * math.sin(anchor_angle1)],
+            [0.0, 0.0, 0.0],
+            [length, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    hinges = []
+    anchors = []
+    for apex in (0, 1):
+        for ratio in ratios:
+            hinge_anchor = previous.copy()
+            hinge_anchor[apex] *= ratio
+            hinges.append(current.copy())
+            anchors.append(hinge_anchor)
+
+    forces, hessians = _evaluate_bending_hinges_cpu(hinges, anchors, length, device)
+    gradient_direction = np.array([0.0, math.sin(current_angle), -math.cos(current_angle)])
+    for apex in (0, 1):
+        for threshold_side in (0, 1):
+            with test.subTest(anchor_apex=apex, above_cutoff=bool(threshold_side)):
+                index = 2 * apex + threshold_side
+                test.assertTrue(np.isfinite(forces[index]).all())
+                test.assertTrue(np.isfinite(hessians[index]).all())
+
+                # Current theta = -30 deg; previous theta = -15 deg from two
+                # separately rotated apexes. kd = dt = 1e-3, so accepted
+                # anchors add 15 deg of damping force and one elastic Hessian.
+                force_angle = current_angle if threshold_side == 0 else math.pi / 4.0
+                hessian_factor = (1.0 if threshold_side == 0 else 2.0) / length
+                np.testing.assert_allclose(
+                    forces[index, 0],
+                    force_angle * gradient_direction,
+                    rtol=2.0e-3,
+                    atol=1.0e-4,
+                )
+                np.testing.assert_allclose(
+                    hessians[index, 0],
+                    hessian_factor * np.outer(gradient_direction, gradient_direction),
+                    rtol=2.0e-3,
+                    atol=0.1,
+                )
+
 def _bending_damping_handles_degenerate_anchor(test, device):
     """Bending damping skips collapsed previous-step geometry."""
     with wp.ScopedDevice(device):
@@ -6743,6 +6874,18 @@ add_function_test(
     "test_bending_force_is_scale_free",
     _bending_force_is_scale_free,
     devices=devices,
+)
+add_function_test(
+    TestSolverVBD,
+    "test_bending_relative_area_brackets_cpu",
+    _bending_relative_area_brackets_cpu,
+    devices=cpu_devices,
+)
+add_function_test(
+    TestSolverVBD,
+    "test_bending_displaced_anchor_damping_cpu",
+    _bending_displaced_anchor_damping_cpu,
+    devices=cpu_devices,
 )
 add_function_test(
     TestSolverVBD,
