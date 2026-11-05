@@ -829,7 +829,8 @@ def _validate_layouts(
 
     Returns:
         The :func:`_check_layout` result for each built-in frequency and for the root joint,
-        coordinates, and DOFs (keys ``"root_joint"``, ``"root_coord"``, and ``"root_dof"``).
+        coordinates, DOFs, and child body (keys ``"root_joint"``, ``"root_coord"``,
+        ``"root_dof"``, and ``"root_body"``).
     """
     world_count, count_per_world = articulation_ids.shape
     ids = articulation_ids.ravel()
@@ -872,6 +873,8 @@ def _validate_layouts(
     root_slots = np.arange(slot_count)
     root_origins = selected_origins(root_slots, begins, begins)
     results["root_joint"] = check(root_slots, begins - root_origins, zeros, root_origins)
+    # The root body must remain addressable even if include_links excludes it.
+    results["root_body"] = check(root_slots, zeros, zeros, joint_child[begins], explicit_values=True)
     for key, starts in (("root_coord", joint_q_start), ("root_dof", joint_qd_start)):
         fallback = starts[begins]
         entries, rows = _ragged_arange(fallback, starts[begins + 1] - fallback)
@@ -1372,7 +1375,7 @@ class ArticulationView:
         self.is_floating_base: bool | None = _uniform_value(root_is_floating)
         self.root_joint_type: int | None = _uniform_value(root_types)
         # root transforms and velocities, addressed through the root joint's own layout
-        root_keys = ("root_coord", "root_dof") if self.is_floating_base else ("root_joint",)
+        root_keys = ("root_coord", "root_dof", "root_body") if self.is_floating_base else ("root_joint",)
         self._root_layouts = [validations[key][0] for key in root_keys]
         if self.is_floating_base is None:
             self._root_unavailable_reason = "selected articulations use different root behavior"
@@ -1534,7 +1537,11 @@ class ArticulationView:
                 layout.get_model_indices()
         if self._root_unavailable_reason is None:
             if self.is_floating_base:
-                root_slices = ((self._root_layouts[0], Slice(0, 7)), (self._root_layouts[-1], Slice(0, 6)))
+                root_slices = (
+                    (self._root_layouts[0], Slice(0, 7)),
+                    (self._root_layouts[1], Slice(0, 6)),
+                    (self._root_layouts[2], 0),
+                )
             else:
                 root_slices = ((self._root_layouts[0], 0), (self._root_layouts[0], Slice(0, 1)))
             for layout, root_slice in root_slices:
@@ -1974,6 +1981,10 @@ class ArticulationView:
         """
         Get the root transforms of the articulations.
 
+        Floating-base roots in a State use the root body's world pose, which
+        must be updated by forward kinematics or a solver step. Model reads
+        continue to use the root joint's coordinates.
+
         Args:
             source: Where to get the root transforms (Model or State).
 
@@ -1982,7 +1993,10 @@ class ArticulationView:
         """
         layout = self._root_layout(0)
         if self.is_floating_base:
-            attrib = self._get_attribute_values("joint_q", source, _slice=Slice(0, 7), layout=layout)
+            if isinstance(source, State):
+                attrib = self._get_attribute_values("body_q", source, _slice=0, layout=self._root_layout(2))
+            else:
+                attrib = self._get_attribute_values("joint_q", source, _slice=Slice(0, 7), layout=layout)
         else:
             attrib = self._get_attribute_values("joint_X_p", self.model, _slice=0, layout=layout)
 
