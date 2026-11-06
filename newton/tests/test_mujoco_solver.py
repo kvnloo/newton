@@ -9860,6 +9860,149 @@ class TestMuJoCoSolverPairProperties(unittest.TestCase):
             np.zeros_like(mujoco_contacts_solver.mjw_model.pair_margin.numpy()),
         )
 
+
+    def _build_compiled_pair_row_model(self, rows, world_count=2):
+        """Build replicated CPU worlds with distinct authored pair properties."""
+        template = newton.ModelBuilder()
+        shapes = []
+        for x in (0.0, 0.1, 0.2):
+            body = template.add_body(xform=wp.transform(wp.vec3(x, 0.0, 0.5), wp.quat_identity()), mass=0.01)
+            shapes.append(template.add_shape_box(body, hx=0.01, hy=0.01, hz=0.01))
+
+        pair_geoms = {"AB": (0, 1), "AC": (0, 2), "BA": (1, 0), "G": (1, 2), "H": (2, 1)}
+        builder = newton.ModelBuilder()
+        SolverMuJoCo.register_custom_attributes(builder)
+        for w in range(world_count):
+            builder.add_world(template, xform=wp.transform((w * 2.0, 0.0, 0.0), wp.quat_identity()))
+        for w, pair, mu, timeconst in rows:
+            a, b = pair_geoms.get(pair, (-1, -1))
+            offset = max(w, 0) * len(shapes)
+            builder.add_custom_values(
+                **{
+                    "mujoco:pair_world": w,
+                    "mujoco:pair_geom1": shapes[a] + offset if a >= 0 else -1,
+                    "mujoco:pair_geom2": shapes[b] + offset if b >= 0 else -1,
+                    "mujoco:pair_condim": 3,
+                    "mujoco:pair_friction": vec5(mu, mu, 0.005, 0.0001, 0.0001),
+                    "mujoco:pair_solref": wp.vec2(timeconst, 1.0),
+                    "mujoco:pair_solreffriction": wp.vec2(timeconst + 0.005, 1.1),
+                    "mujoco:pair_solimp": vec5(0.8 + mu * 0.05, 0.95, 0.001, 0.5, 2.0),
+                    "mujoco:pair_margin": timeconst / 10.0,
+                    "mujoco:pair_gap": timeconst / 100.0,
+                }
+            )
+        return builder.finalize(device="cpu")
+
+    def _assert_compiled_pair_row_properties(self, solver, expected_rows):
+        """Verify all six pair property arrays use the expected authored rows."""
+        model = solver.model
+        np.testing.assert_array_equal(solver.mjc_pair_to_newton_pair.numpy(), expected_rows)
+        for attr in (
+            "pair_friction",
+            "pair_solref",
+            "pair_solreffriction",
+            "pair_solimp",
+            "pair_margin",
+            "pair_gap",
+        ):
+            authored = getattr(model.mujoco, attr).numpy()
+            actual = getattr(solver.mjw_model, attr).numpy()
+            np.testing.assert_allclose(actual, authored[expected_rows], rtol=1e-6, atol=1e-7, err_msg=attr)
+
+    def test_pair_properties_compiled_two_world_matrix_cpu(self):
+        """Verify post-compile reordering, shared rows and world-specific updates."""
+        local_rows = [
+            (0, "AB", 0.11, 0.011),
+            (0, "AC", 0.12, 0.012),
+            (0, "BA", 0.13, 0.013),
+            (1, "AB", 0.21, 0.021),
+            (1, "AC", 0.22, 0.022),
+            (1, "BA", 0.23, 0.023),
+        ]
+        local_model = self._build_compiled_pair_row_model(local_rows)
+        local_solver = SolverMuJoCo(
+            local_model, use_mujoco_cpu=False, use_mujoco_contacts=False, iterations=1, disable_sensors=True
+        )
+        self.assertEqual(local_solver.mj_model.npair, 3)
+        local_expected = np.array([[0, 2, 1], [3, 5, 4]], dtype=np.int32)
+        self._assert_compiled_pair_row_properties(local_solver, local_expected)
+        np.testing.assert_allclose(local_solver.mjw_model.pair_friction.numpy()[:, :, 0],
+                                   [[0.11, 0.13, 0.12], [0.21, 0.23, 0.22]], rtol=1e-6)
+
+        # Row 5 (world 1's BA) must update only world 1's compiled middle pair.
+        friction = local_model.mujoco.pair_friction.numpy().copy()
+        solref = local_model.mujoco.pair_solref.numpy().copy()
+        friction[5, 0] = 0.24
+        solref[5, 0] = 0.024
+        local_model.mujoco.pair_friction.assign(wp.array(friction, dtype=vec5, device=local_model.device))
+        local_model.mujoco.pair_solref.assign(wp.array(solref, dtype=wp.vec2, device=local_model.device))
+        local_solver.notify_model_changed(ModelFlags.SHAPE_PROPERTIES)
+        self._assert_compiled_pair_row_properties(local_solver, local_expected)
+        np.testing.assert_allclose(local_solver.mjw_model.pair_friction.numpy()[:, :, 0],
+                                   [[0.11, 0.13, 0.12], [0.21, 0.24, 0.22]], rtol=1e-6)
+        np.testing.assert_allclose(local_solver.mjw_model.pair_solref.numpy()[:, :, 0],
+                                   [[0.011, 0.013, 0.012], [0.021, 0.024, 0.022]], rtol=1e-6)
+
+        mixed_rows = [
+            (-1, "G", 0.50, 0.050),
+            (0, "AB", 0.11, 0.011),
+            (1, "AB", 0.21, 0.021),
+            (0, "AC", 0.12, 0.012),
+            (1, "AC", 0.22, 0.022),
+            (0, "BA", 0.13, 0.013),
+            (1, "BA", 0.23, 0.023),
+            (-1, "H", 0.60, 0.060),
+        ]
+        model = self._build_compiled_pair_row_model(mixed_rows)
+        solver = SolverMuJoCo(model, use_mujoco_cpu=False, use_mujoco_contacts=False, iterations=1, disable_sensors=True)
+        self.assertEqual(solver.mj_model.npair, 5)
+
+        # G/H compiled IDs are not assumed: recover each pair's identity from
+        # its actual compiled geom IDs and the solver's geom-to-shape mapping.
+        geom_to_shape = solver.mjc_geom_to_newton_shape.numpy()[0]
+        keys = {(0, 1): "AB", (0, 2): "AC", (1, 0): "BA", (1, 2): "G", (2, 1): "H"}
+        rows_by_key = {"G": (0, 0), "AB": (1, 2), "AC": (3, 4), "BA": (5, 6), "H": (7, 7)}
+        compiled_keys = []
+        for g1, g2 in zip(solver.mj_model.pair_geom1, solver.mj_model.pair_geom2, strict=True):
+            shapes = (int(geom_to_shape[int(g1)]), int(geom_to_shape[int(g2)]))
+            self.assertIn(shapes, keys)
+            compiled_keys.append(keys[shapes])
+        self.assertEqual(set(compiled_keys), set(rows_by_key))
+        expected = np.array(
+            [[rows_by_key[key][world] for key in compiled_keys] for world in range(2)], dtype=np.int32
+        )
+        self._assert_compiled_pair_row_properties(solver, expected)
+
+        # The world-1 BA update affects one slot; shared H affects both worlds.
+        friction = model.mujoco.pair_friction.numpy().copy()
+        solref = model.mujoco.pair_solref.numpy().copy()
+        friction[6, 0] = 0.24
+        solref[6, 0] = 0.024
+        friction[7, 0] = 0.65
+        solref[7, 0] = 0.065
+        model.mujoco.pair_friction.assign(wp.array(friction, dtype=vec5, device=model.device))
+        model.mujoco.pair_solref.assign(wp.array(solref, dtype=wp.vec2, device=model.device))
+        solver.notify_model_changed(ModelFlags.SHAPE_PROPERTIES)
+        self._assert_compiled_pair_row_properties(solver, expected)
+
+    def test_pair_properties_global_skipped_and_homogeneity_cpu(self):
+        """Verify global-only rows, skipped rows, and mismatched world counts."""
+        for rows, expected in (
+            ([(-1, "G", 0.50, 0.002), (-1, "H", 0.60, 0.003)], [[0, 1], [0, 1]]),
+            ([(0, "INVALID", 0.50, 0.050), (0, "AB", 0.11, 0.011),
+              (1, "INVALID", 0.60, 0.060), (1, "AB", 0.21, 0.021)], [[1], [3]]),
+        ):
+            with self.subTest(expected=expected):
+                model = self._build_compiled_pair_row_model(rows)
+                solver = SolverMuJoCo(
+                    model, use_mujoco_cpu=False, use_mujoco_contacts=False, iterations=1, disable_sensors=True
+                )
+                self._assert_compiled_pair_row_properties(solver, np.array(expected, dtype=np.int32))
+
+        mismatched = self._build_compiled_pair_row_model([(0, "AB", 0.11, 0.011)])
+        with self.assertRaisesRegex(ValueError, "homogeneous worlds.*contact pairs"):
+            SolverMuJoCo(mismatched, use_mujoco_cpu=False, iterations=1, disable_sensors=True)
+
     def test_global_pair_exported_to_spec(self):
         """Pairs with pair_world=-1 (global) should be included in the MuJoCo spec.
 
