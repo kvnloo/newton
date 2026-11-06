@@ -63,6 +63,46 @@ def test_joint_legacy_relaxation_switch(test, device):
     test.assertLess(_pendulum_response(device, -9.81, 0.0, **kw), 0.85)
 
 
+
+def _distance_joint_pose(device, angular_relaxation):
+    """Return the body pose after one distance-joint projection."""
+    builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+    body = builder.add_link(xform=wp.transform((1.0, 0.0, 0.0), wp.quat_identity()), mass=1.0)
+    builder.add_shape_box(body, hx=0.1, hy=0.1, hz=0.1)
+    joint = builder.add_joint_distance(
+        parent=-1,
+        child=body,
+        parent_xform=wp.transform((0.0, 0.0, 0.0), wp.quat_identity()),
+        child_xform=wp.transform((0.0, 0.25, 0.0), wp.quat_identity()),
+        min_distance=0.0,
+        max_distance=1.0,
+    )
+    builder.add_articulation([joint])
+    model = builder.finalize(device=device)
+    solver = newton.solvers.SolverXPBD(
+        model,
+        iterations=1,
+        joint_linear_relaxation=0.7,
+        joint_angular_relaxation=angular_relaxation,
+    )
+    state_in, state_out = model.state(), model.state()
+    solver.step(state_in, state_out, None, None, 1.0 / 60.0)
+    return state_out.body_q.numpy()[body].copy()
+
+
+def test_distance_joint_positional_row_scales_anchor_moment(test, device):
+    """Verify distance-row moments use linear, not angular, relaxation."""
+    # Distance sqrt(1 + 0.25**2) > 1 m; the child anchor has a nonzero
+    # moment arm with r x n = (0, 0, -0.25 / sqrt(1.0625)).
+    matched = _distance_joint_pose(device, angular_relaxation=0.7)
+    mixed = _distance_joint_pose(device, angular_relaxation=0.4)
+
+    # The violated distance row must actually rotate the off-center body.
+    test.assertGreater(abs(float(matched[5])), 1.0e-5)
+    # Rotational relaxation must not change a purely positional row.
+    np.testing.assert_allclose(mixed, matched, atol=1.0e-6, rtol=1.0e-6)
+
+
 devices = get_test_devices()
 
 
@@ -82,6 +122,14 @@ add_function_test(
     "test_joint_legacy_relaxation_switch",
     test_joint_legacy_relaxation_switch,
     devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBDJoints,
+    "test_distance_joint_positional_row_scales_anchor_moment",
+    test_distance_joint_positional_row_scales_anchor_moment,
+    devices=[wp.get_device("cpu")],
     check_output=False,
 )
 
