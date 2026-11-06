@@ -1624,22 +1624,32 @@ class TestMuJoCoAdhesionActuators(unittest.TestCase):
     def test_adhesion_actuator_matches_native_mujoco(self):
         """Match native MuJoCo transmission, gain, bias and control limits."""
         mujoco, _ = SolverMuJoCo.import_mujoco()
-        mjcf = MJCF_ADHESION_ACTUATOR.format(target='body="ceiling"', ctrlrange="0 1", gain="5")
-        native_model = mujoco.MjModel.from_xml_string(mjcf)
+        explicit_gain_mjcf = MJCF_ADHESION_ACTUATOR.format(target='body="ceiling"', ctrlrange="0 1", gain="5")
+        for expected_gain, mjcf in (
+            (5.0, explicit_gain_mjcf),
+            (1.0, explicit_gain_mjcf.replace(' gain="5"', "")),
+        ):
+            with self.subTest(expected_gain=expected_gain):
+                native_model = mujoco.MjModel.from_xml_string(mjcf)
 
-        builder = ModelBuilder()
-        SolverMuJoCo.register_custom_attributes(builder)
-        builder.add_mjcf(mjcf)
-        mj_model = SolverMuJoCo(builder.finalize()).mj_model
+                builder = ModelBuilder()
+                SolverMuJoCo.register_custom_attributes(builder)
+                builder.add_mjcf(mjcf)
+                mj_model = SolverMuJoCo(builder.finalize(device="cpu"), use_mujoco_cpu=True).mj_model
 
-        self.assertEqual(native_model.nu, 1)
-        self.assertEqual(mj_model.nu, native_model.nu)
-        np.testing.assert_array_equal(mj_model.actuator_trntype, native_model.actuator_trntype)
-        np.testing.assert_array_equal(mj_model.actuator_trnid[:, 0], native_model.actuator_trnid[:, 0])
-        np.testing.assert_allclose(mj_model.actuator_gainprm, native_model.actuator_gainprm)
-        np.testing.assert_allclose(mj_model.actuator_biasprm, native_model.actuator_biasprm)
-        np.testing.assert_array_equal(mj_model.actuator_ctrllimited, native_model.actuator_ctrllimited)
-        np.testing.assert_allclose(mj_model.actuator_ctrlrange, native_model.actuator_ctrlrange)
+                self.assertEqual(native_model.nu, 1)
+                self.assertEqual(mj_model.nu, native_model.nu)
+                self.assertEqual(int(native_model.actuator_trntype[0]), 5)
+                self.assertEqual(float(native_model.actuator_gainprm[0, 0]), expected_gain)
+                self.assertEqual(float(mj_model.actuator_gainprm[0, 0]), expected_gain)
+                self.assertEqual(int(native_model.actuator_ctrllimited[0]), 1)
+                np.testing.assert_allclose(native_model.actuator_ctrlrange, [[0.0, 1.0]], rtol=0, atol=0)
+                np.testing.assert_array_equal(mj_model.actuator_trntype, native_model.actuator_trntype)
+                np.testing.assert_array_equal(mj_model.actuator_trnid[:, 0], native_model.actuator_trnid[:, 0])
+                np.testing.assert_allclose(mj_model.actuator_gainprm, native_model.actuator_gainprm)
+                np.testing.assert_allclose(mj_model.actuator_biasprm, native_model.actuator_biasprm)
+                np.testing.assert_array_equal(mj_model.actuator_ctrllimited, native_model.actuator_ctrllimited)
+                np.testing.assert_allclose(mj_model.actuator_ctrlrange, native_model.actuator_ctrlrange)
 
     def test_adhesion_actuator_rejects_what_mujoco_rejects(self):
         """Reject a joint target, a negative gain and a negative control range, as MuJoCo does."""
