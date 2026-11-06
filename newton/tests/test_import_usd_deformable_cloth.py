@@ -91,6 +91,9 @@ class TestUSDDeformableCloth(unittest.TestCase):
         cases = (
             # Indexed, so the values must be flattened: the quad is blue and the triangle red.
             ("indexed", [red, blue], [1, 0], [0.25, 0.75], [srgb(blue), srgb(blue), srgb(red)], [0.25, 0.25, 0.75]),
+            # Both primvars are indexed: opacity must also use its flattened face order.
+            ("dual_indexed", [red, blue], [1, 0], [0.25, 0.75], [srgb(blue), srgb(blue), srgb(red)],
+             [0.75, 0.75, 0.25]),
             # Only the faces with a non-finite value fall back to the builder defaults.
             ("non_finite_face", [red, (nan, 0.0, 0.0)], None, [nan, 0.75], [srgb(red), srgb(red), (0.7, 0.5, 0.3)],
              [1.0, 1.0, 0.75]),
@@ -112,12 +115,13 @@ class TestUSDDeformableCloth(unittest.TestCase):
                 color.Set(colors)
                 if indices is not None:
                     color.SetIndices(Vt.IntArray(indices))
-                primvars.CreatePrimvar("displayOpacity", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.uniform).Set(
-                    opacities
-                )
+                opacity = primvars.CreatePrimvar("displayOpacity", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.uniform)
+                opacity.Set(opacities)
+                if name == "dual_indexed":
+                    opacity.SetIndices(Vt.IntArray([1, 0]))
 
                 builder = newton.ModelBuilder()
-                if name == "indexed":
+                if name in ("indexed", "dual_indexed"):
                     with self.assertNoLogs("newton", level="WARNING"):
                         builder.add_usd(stage)
                 else:
