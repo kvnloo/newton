@@ -4,6 +4,8 @@
 """Cover contact normals and footprints for convex shapes."""
 
 import gc
+import statistics
+import time
 import unittest
 from itertools import product
 from unittest.mock import patch
@@ -22,7 +24,7 @@ from newton._src.geometry.multicontact import (
     create_build_manifold,
     update_incremental_plane_tracker,
 )
-from newton._src.geometry.support_function import GenericShapeData, SupportMapDataProvider, support_map
+from newton._src.geometry.support_function import GenericShapeData, SupportMapDataProvider, pack_mesh_ptr, support_map
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
 
@@ -867,6 +869,147 @@ def test_contact_feature_duplicates(test, device):
 add_function_test(
     TestBoxContactNormal, "test_contact_feature_duplicates", test_contact_feature_duplicates, devices=get_test_devices()
 )
+
+
+
+@wp.struct
+class _BoundWriterData:
+    """Per-pair CPU writer without cross-thread atomic contention."""
+
+    contacts: wp.array[ContactData]
+    counts: wp.array[int]
+
+
+@wp.func
+def _write_bound_contact(contact: ContactData, writer: _BoundWriterData, slot: int):
+    pair = wp.tid()
+    index = writer.counts[pair]
+    writer.contacts[pair * 5 + index] = contact
+    writer.counts[pair] = index + 1
+
+
+_build_bound_box_convex = create_build_manifold(support_map, _write_bound_contact, post_process_minkowski_only)
+_build_unbound_box_convex = create_build_manifold(
+    support_map, _write_bound_contact, post_process_minkowski_only, _support_plane_filter=False
+)
+
+
+@wp.kernel(enable_backward=False)
+def _box_convex_writer_bound_kernel(mesh_id: wp.uint64, witness_shift: float, filter_on: bool, writer: _BoundWriterData):
+    """Two identical one-meter convex cubes, with controlled witness-plane error."""
+    shape_a = GenericShapeData()
+    shape_a.shape_type = int(newton.GeoType.BOX)
+    shape_a.scale = wp.vec3(0.5, 0.5, 0.5)
+    shape_a.shape_index = -1
+
+    shape_b = GenericShapeData()
+    shape_b.shape_type = int(newton.GeoType.CONVEX_MESH)
+    shape_b.scale = wp.vec3(1.0)
+    shape_b.auxiliary = pack_mesh_ptr(mesh_id)
+    shape_b.shape_index = -1
+
+    position_b = wp.vec3(0.0, 0.0, 0.98)
+    # The true top/bottom support planes are z=0.5 and z=0.48.
+    # Each witness offset remains inside the 10 um feature-plane tolerance.
+    p_a = wp.vec3(0.0, 0.0, 0.5 + witness_shift)
+    p_b = wp.vec3(0.0, 0.0, 0.48 - witness_shift)
+    if filter_on:
+        _build_bound_box_convex(
+            shape_a, shape_b, wp.quat_identity(), wp.vec3(0.0), wp.quat_identity(),
+            position_b, p_a, p_b, wp.vec3(0.0, 0.0, 1.0),
+            SupportMapDataProvider(), writer, ContactData(),
+        )
+    else:
+        _build_unbound_box_convex(
+            shape_a, shape_b, wp.quat_identity(), wp.vec3(0.0), wp.quat_identity(),
+            position_b, p_a, p_b, wp.vec3(0.0, 0.0, 1.0),
+            SupportMapDataProvider(), writer, ContactData(),
+        )
+
+
+def _box_convex_writer_fixture(pairs: int):
+    mesh = newton.Mesh.create_box(0.5, 0.5, 0.5, duplicate_vertices=False, compute_inertia=False)
+    mesh_id = mesh.finalize("cpu")
+    writer = _BoundWriterData()
+    writer.contacts = wp.empty(pairs * 5, dtype=ContactData, device="cpu")
+    writer.counts = wp.zeros(pairs, dtype=int, device="cpu")
+    return mesh, mesh_id, writer
+
+
+def test_box_convex_cpu_writer_bound(test, device):
+    """Exercise actual manifold writes on both sides of the support-depth floor."""
+    mesh, mesh_id, writer = _box_convex_writer_fixture(1)
+    # The unperturbed resting pair is a control. 3 um per face remains
+    # above the floor; 8 um per face lies below it but is still planar.
+    for shift, with_filter, without_filter in ((0.0, 4, 4), (3.0e-6, 4, 4), (8.0e-6, 1, 4)):
+        for enabled, expected_count in ((True, with_filter), (False, without_filter)):
+            with test.subTest(witness_shift=shift, filter_on=enabled):
+                writer.counts.zero_()
+                wp.launch(
+                    _box_convex_writer_bound_kernel,
+                    dim=1,
+                    inputs=[mesh_id, shift, enabled, writer],
+                    device=device,
+                )
+                count = int(writer.counts.numpy()[0])
+                test.assertEqual(count, expected_count)
+                contacts = writer.contacts.numpy()[:count]
+                np.testing.assert_allclose(
+                    contacts["contact_distance"],
+                    np.full(count, -0.02 - 2.0 * shift),
+                    rtol=0.0,
+                    atol=2.0e-7,
+                )
+                np.testing.assert_array_equal(contacts["sort_sub_key"], np.arange(count))
+
+
+add_function_test(
+    TestBoxContactNormal,
+    "test_box_convex_cpu_writer_bound",
+    test_box_convex_cpu_writer_bound,
+    devices=[wp.get_device("cpu")],
+)
+
+
+def benchmark_box_convex_cpu_writer_bound(pairs: int = 512, repeats: int = 9):
+    """Measure hot CPU manifold generation with/without the two extra support scans.
+
+    Run explicitly with:
+    uv run --extra dev -c "from newton.tests.test_box_contact_normal import benchmark_box_convex_cpu_writer_bound; benchmark_box_convex_cpu_writer_bound()"
+
+    Kernel compilation, array reset, and result copies are excluded. Both variants
+    use the same resting box/8-vertex convex-hull pair and emit four contacts.
+    """
+    mesh, mesh_id, writer = _box_convex_writer_fixture(pairs)
+    device = wp.get_device("cpu")
+    expected = np.full(pairs, 4, dtype=np.int32)
+    for enabled in (True, False):
+        writer.counts.zero_()
+        wp.launch(_box_convex_writer_bound_kernel, dim=pairs, inputs=[mesh_id, 0.0, enabled, writer], device=device)
+        wp.synchronize_device(device)
+        np.testing.assert_array_equal(writer.counts.numpy(), expected)
+
+    timings = {True: [], False: []}
+    for rep in range(repeats):
+        for enabled in ((True, False) if rep % 2 == 0 else (False, True)):
+            writer.counts.zero_()
+            start = time.perf_counter()
+            wp.launch(
+                _box_convex_writer_bound_kernel,
+                dim=pairs,
+                inputs=[mesh_id, 0.0, enabled, writer],
+                device=device,
+            )
+            wp.synchronize_device(device)
+            timings[enabled].append(time.perf_counter() - start)
+            np.testing.assert_array_equal(writer.counts.numpy(), expected)
+
+    bound_us = 1.0e6 * statistics.median(timings[True]) / pairs
+    unbound_us = 1.0e6 * statistics.median(timings[False]) / pairs
+    result = {"pairs": pairs, "repeats": repeats, "bound_on_us_per_pair": bound_us,
+              "bound_off_us_per_pair": unbound_us, "ratio_on_over_off": bound_us / unbound_us}
+    print(result)
+    return result
 
 
 if __name__ == "__main__":

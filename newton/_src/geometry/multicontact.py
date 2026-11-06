@@ -739,7 +739,13 @@ def add_contact_feature_point(
     return add_avoid_duplicates_vec2(projected, count, point_2d, eps)
 
 
-def create_build_manifold(support_func: Any, writer_func: Any, post_process_contact: Any, _support_funcs: Any = None):
+def create_build_manifold(
+    support_func: Any,
+    writer_func: Any,
+    post_process_contact: Any,
+    _support_funcs: Any = None,
+    _support_plane_filter: bool = True,
+):
     """
     Factory function to create manifold generation functions with a specific support mapping function.
 
@@ -752,6 +758,8 @@ def create_build_manifold(support_func: Any, writer_func: Any, post_process_cont
                      (geometry, direction, data_provider) and returns a support point
         writer_func: Function to write contact data (signature: (ContactData, writer_data) -> None)
         post_process_contact: Function to post-process contact data
+        _support_plane_filter: Private factory-time comparison switch. Disabling
+            it is only for measuring the CPU writer path without the bound.
 
     Returns:
         build_manifold function that generates up to 5 contact points between two shapes
@@ -1308,14 +1316,19 @@ def create_build_manifold(support_func: Any, writer_func: Any, post_process_cont
                 count_out = 0
                 normal_dot = 0.0
             else:
-                support_a = support_func(geom_a, normal, data_provider)
-                support_b = (
-                    wp.quat_rotate(relative_orientation_b, support_func(geom_b, local_normal_b, data_provider))
-                    + relative_position_b
-                )
-                minimum_distance = wp.dot(support_b - support_a, normal)
-                # Account for float32 rounding when subtracting large support coordinates.
-                tolerance = EPS + 9.5367431640625e-7 * (wp.length(support_a) + wp.length(support_b))
+                # The disabled variant is used by the CPU writer benchmark and
+                # boundary regression; the default keeps the production filter.
+                minimum_distance = -1.0e30
+                if wp.static(_support_plane_filter):
+                    support_a = support_func(geom_a, normal, data_provider)
+                    support_b = (
+                        wp.quat_rotate(relative_orientation_b, support_func(geom_b, local_normal_b, data_provider))
+                        + relative_position_b
+                    )
+                    minimum_distance = wp.dot(support_b - support_a, normal)
+                    # Account for float32 rounding when subtracting large support coordinates.
+                    tolerance = EPS + 9.5367431640625e-7 * (wp.length(support_a) + wp.length(support_b))
+                    minimum_distance -= tolerance
                 num_manifold_points, normal_dot = extract_4_point_contact_manifolds(
                     a_buffer,
                     a_count,
@@ -1338,7 +1351,7 @@ def create_build_manifold(support_func: Any, writer_func: Any, post_process_cont
                     position_b_ws,
                     quaternion_a_ws,
                     quaternion_b_ws,
-                    minimum_distance - tolerance,
+                    minimum_distance,
                 )
                 count_out = wp.min(num_manifold_points, 4)
 
