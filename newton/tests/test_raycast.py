@@ -18,7 +18,75 @@ from newton.tests.unittest_utils import add_function_test, get_test_devices
 
 
 class TestRaycast(unittest.TestCase):
-    pass
+    def test_box_rounded_edge_normals_cpu(self):
+        """Pin the entry and exit normals at float32-rounded box edges."""
+        out_t = wp.zeros(1, dtype=float, device="cpu")
+        out_n = wp.zeros(1, dtype=wp.vec3, device="cpu")
+        half_extents = wp.vec3(0.30, 0.24, 0.04)
+        cases = (
+            (
+                "outside_entry",
+                (5.0502934, -1.8969021, 7.960762),
+                (-0.5309731, 0.17350523, -0.82943565),
+                9.54957962,
+                (0.0, -(2.0**-0.5), 2.0**-0.5),
+            ),
+            (
+                "inside_exit",
+                (-0.015038496, -0.034916792, 0.014108458),
+                (0.06421096, 0.9935398, 0.09357114),
+                0.27670434,
+                (0.0, 2.0**-0.5, 2.0**-0.5),
+            ),
+        )
+        for name, origin, direction, expected_t, expected_normal in cases:
+            with self.subTest(name=name):
+                wp.launch(
+                    kernel_test_geom,
+                    dim=1,
+                    inputs=[
+                        out_t,
+                        out_n,
+                        wp.transform_identity(),
+                        half_extents,
+                        GeoType.BOX,
+                        wp.vec3(*origin),
+                        wp.vec3(*direction),
+                        0,
+                    ],
+                    device="cpu",
+                )
+                self.assertAlmostEqual(float(out_t.numpy()[0]), expected_t, delta=2e-5)
+                np.testing.assert_allclose(
+                    out_n.numpy()[0], expected_normal, rtol=0.0, atol=2e-6
+                )
+
+    def test_box_exact_corner_normal_cpu(self):
+        """Keep the normalized average of the two outward corner faces."""
+        out_t = wp.zeros(1, dtype=float, device="cpu")
+        out_n = wp.zeros(1, dtype=wp.vec3, device="cpu")
+        wp.launch(
+            kernel_test_geom,
+            dim=1,
+            inputs=[
+                out_t,
+                out_n,
+                wp.transform_identity(),
+                wp.vec3(1.0, 1.0, 1.0),
+                GeoType.BOX,
+                wp.vec3(-2.0, -2.0, 0.0),
+                wp.vec3(1.0, 1.0, 0.0),
+                0,
+            ],
+            device="cpu",
+        )
+        self.assertAlmostEqual(float(out_t.numpy()[0]), 1.0, delta=1e-6)
+        np.testing.assert_allclose(
+            out_n.numpy()[0],
+            (-(2.0**-0.5), -(2.0**-0.5), 0.0),
+            rtol=0.0,
+            atol=1e-6,
+        )
 
 
 @wp.kernel
