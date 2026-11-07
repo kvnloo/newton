@@ -8,6 +8,8 @@
 
 # Common PR companion files do not require maintainer approval
 /CHANGELOG.md
+/changelog/
+/changelog/README.md                     @newton-physics/maintainers
 /README.md
 
 # Repo tooling and config
@@ -24,5 +26,5 @@
 /newton/licenses/                        @newton-physics/maintainers
 
 # Solver-specific owners
-/newton/_src/solvers/kamino/             @newton-physics/disney-research
-/newton/_src/solvers/style3d/            @newton-physics/style3d-research
+/newton/_src/solvers/kamino/             @newton-physics/disney-research @newton-physics/maintainers
+/newton/_src/solvers/style3d/            @newton-physics/style3d-research @newton-physics/maintainers

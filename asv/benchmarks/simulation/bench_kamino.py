@@ -14,9 +14,8 @@ wp.config.log_level = wp.LOG_WARNING
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
 
+from benchmark_metric_tracks import _SimulationMetricTracks, _SimulationMetricTracksUnparameterized
 from benchmark_metrics import (
-    _SimulationMetricTracks,
-    _SimulationMetricTracksUnparameterized,
     collect_simulation_metrics,
 )
 
@@ -49,6 +48,51 @@ def _collect_metrics_dr_legs(robot, world_count, num_frames, samples, use_policy
         samples=samples,
         validate=lambda workload: workload.test_final(),
     )
+
+
+class G1DVI:
+    """Measure steady G1 DVI frames for small and large batches.
+
+    Reuse the warmed simulation across samples to amortize model construction
+    and graph capture. Keep this benchmark outside the fast PR gate; run it
+    explicitly with ``uvx --with virtualenv asv run --bench G1DVI``.
+    """
+
+    version = "2"  # Measure consecutive samples from one warmed simulation.
+    params = [[4, 512]]
+    param_names = ["world_count"]
+    number = 1
+    rounds = 1
+    repeat = 3
+    warmup_time = 0
+    timeout = 600
+
+    def setup(self, world_count):
+        if wp.get_cuda_device_count() == 0:
+            raise SkipNotImplemented
+
+        # ASV calls setup before each sample; retain the settled simulation.
+        if getattr(self, "_world_count", None) == world_count:
+            return
+
+        from newton.examples.robot.example_robot_g1 import Example  # noqa: PLC0415
+        from newton.viewer import ViewerNull  # noqa: PLC0415
+
+        args = Example.create_parser().parse_args(["--solver", "kamino", "--world-count", str(world_count)])
+        with wp.ScopedDevice("cuda:0"):
+            self.example = Example(ViewerNull(), args)
+            for _ in range(100):
+                self.example.step()
+        wp.synchronize_device(self.example.model.device)
+        self._world_count = world_count
+
+    def time_simulate(self, world_count):
+        for _ in range(200):
+            self.example.step()
+        wp.synchronize_device(self.example.model.device)
+
+    def teardown(self, world_count):
+        self.example.test_final()
 
 
 class _FastBenchmark:
@@ -121,6 +165,7 @@ class _KpiBenchmark(_SimulationMetricTracks):
 
 
 class FastDRLegs(_FastBenchmark):
+    version = "2"  # effort limits now enforced for implicit PD (#3990) -> new ASV series
     num_frames = 25
     robot = "dr_legs"
     repeat = 2
@@ -128,6 +173,7 @@ class FastDRLegs(_FastBenchmark):
 
 
 class FastMetricsDRLegs(_SimulationMetricTracksUnparameterized):
+    version = "2"  # effort limits now enforced for implicit PD (#3990) -> new ASV series
     num_frames = 25
     robot = "dr_legs"
     samples = 2
@@ -144,6 +190,7 @@ class FastMetricsDRLegs(_SimulationMetricTracksUnparameterized):
 
 
 class KpiDRLegs(_KpiBenchmark):
+    version = "2"  # effort limits now enforced for implicit PD (#3990) -> new ASV series
     params: ClassVar[list[list[int]]] = [[4096]]
     num_frames = 25
     robot = "dr_legs"
@@ -158,10 +205,12 @@ class KpiDRLegs(_KpiBenchmark):
 class NotifyDRLegs:
     """Benchmark Kamino model notifications for 2048 DR Legs worlds."""
 
-    number = 10
-    repeat = 7
+    version = "2"  # sampling/methodology changed in #3859 -> new ASV series
+    number = 1
+    repeat = 5
     rounds = 1
-    timeout = 3600
+    warmup_time = 0
+    timeout = 600
     world_count = 2048
 
     def setup(self):
@@ -229,6 +278,7 @@ if __name__ == "__main__":
     from newton.utils import run_benchmark
 
     benchmark_list = {
+        "G1DVI": G1DVI,
         "FastDRLegs": FastDRLegs,
         "FastMetricsDRLegs": FastMetricsDRLegs,
         "KpiDRLegs": KpiDRLegs,

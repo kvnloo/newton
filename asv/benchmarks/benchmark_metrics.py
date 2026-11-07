@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import math
 import time
 from collections.abc import Callable, Sequence
@@ -9,7 +10,17 @@ from typing import Any
 
 import numpy as np
 import warp as wp
-from asv_runner.benchmarks.mark import skip_benchmark_if
+
+
+@dataclass(frozen=True)
+class StartupMetrics:
+    """Mean startup durations in seconds through the first completed simulation frame."""
+
+    total_time: float
+    model_time: float
+    replication_time: float
+    finalize_time: float
+    solver_time: float
 
 
 @dataclass(frozen=True)
@@ -25,98 +36,6 @@ class SimulationMetrics:
     sim_substeps: int
     solver_niter_mean: float | None = None
     solver_niter_max: float | None = None
-
-
-class _SimulationMetricTracks:
-    """ASV track methods backed by cached simulation metrics."""
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_simulate(self, metrics, world_count):
-        return metrics[world_count].mean_world_step_time_ms
-
-    track_simulate.unit = "ms/world-step"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_simulation_steps_per_second(self, metrics, world_count):
-        return metrics[world_count].world_steps_per_second
-
-    track_simulation_steps_per_second.unit = "world-steps/s"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_real_time_factor(self, metrics, world_count):
-        return metrics[world_count].real_time_factor
-
-    track_real_time_factor.unit = "x"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_p95_step_time(self, metrics, world_count):
-        return metrics[world_count].p95_frame_time_ms
-
-    track_p95_step_time.unit = "ms/frame"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_steady_state_gpu_memory(self, metrics, world_count):
-        return metrics[world_count].gpu_memory_mib
-
-    track_steady_state_gpu_memory.unit = "MiB"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_sim_dt(self, metrics, world_count):
-        return metrics[world_count].sim_dt
-
-    track_sim_dt.unit = "s"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_sim_substeps(self, metrics, world_count):
-        return metrics[world_count].sim_substeps
-
-    track_sim_substeps.unit = "simulation-steps/frame"
-
-
-class _SimulationMetricTracksUnparameterized:
-    """ASV track methods backed by one cached simulation configuration."""
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_mean_world_step_time(self, metrics):
-        return metrics.mean_world_step_time_ms
-
-    track_mean_world_step_time.unit = "ms/world-step"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_simulation_steps_per_second(self, metrics):
-        return metrics.world_steps_per_second
-
-    track_simulation_steps_per_second.unit = "world-steps/s"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_real_time_factor(self, metrics):
-        return metrics.real_time_factor
-
-    track_real_time_factor.unit = "x"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_p95_step_time(self, metrics):
-        return metrics.p95_frame_time_ms
-
-    track_p95_step_time.unit = "ms/frame"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_steady_state_gpu_memory(self, metrics):
-        return metrics.gpu_memory_mib
-
-    track_steady_state_gpu_memory.unit = "MiB"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_sim_dt(self, metrics):
-        return metrics.sim_dt
-
-    track_sim_dt.unit = "s"
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_sim_substeps(self, metrics):
-        return metrics.sim_substeps
-
-    track_sim_substeps.unit = "simulation-steps/frame"
 
 
 def compute_simulation_metrics(
@@ -199,8 +118,13 @@ def collect_simulation_metrics(
     synchronize: Callable[[], None] | None = None,
     validate: Callable[[Any], None] | None = None,
     timer: Callable[[], float] = time.perf_counter,
+    reset_workload: Callable[[Any], None] | None = None,
 ) -> SimulationMetrics:
-    """Collect simulation metrics using internal or synchronized wall timing."""
+    """Collect simulation metrics using internal or synchronized wall timing.
+
+    With *reset_workload*, later samples reset the first workload instead of
+    rebuilding it, which dominates the runtime of large workloads.
+    """
     frame_times = []
     experience_frame_times = []
     gpu_memory_bytes = None
@@ -211,8 +135,12 @@ def collect_simulation_metrics(
     device = wp.get_device()
     free_memory_before = device.free_memory
 
+    workload = None
     for sample_index in range(samples):
-        workload = create_workload()
+        if workload is None or reset_workload is None:
+            workload = create_workload()
+        else:
+            reset_workload(workload)
         if sim_dt is None:
             sim_dt = workload.sim_dt
             sim_substeps = workload.sim_substeps
@@ -250,4 +178,42 @@ def collect_simulation_metrics(
         world_count=world_count,
         gpu_memory_bytes=gpu_memory_bytes,
         experience_frame_times=experience_frame_times,
+    )
+
+
+def collect_startup_metrics(
+    create_workload: Callable[[dict[str, float]], Any],
+    samples: int,
+    timer: Callable[[], float] = time.perf_counter,
+) -> StartupMetrics:
+    """Collect mean startup times in seconds through the first completed simulation frame.
+
+    ``create_workload`` records phase durations into the dictionary it receives,
+    and the workload's ``step()`` must complete its device work. ``total`` spans
+    construction through the first completed frame.
+    """
+    if samples <= 0:
+        raise ValueError("samples must be positive")
+    phase_names = ("model", "replication", "finalize", "solver")
+    sample_times = []
+    for _ in range(samples):
+        phase_times = {}
+        start_time = timer()
+        workload = create_workload(phase_times)
+        workload.step()
+        phase_times["total"] = timer() - start_time
+
+        # Free the workload before timing the next one: collect reference cycles and
+        # synchronize so the memory pool releases its allocations.
+        del workload
+        gc.collect()
+        wp.synchronize_device()
+
+        missing_phases = set(phase_names) - phase_times.keys()
+        if missing_phases:
+            raise RuntimeError(f"Missing startup phases: {sorted(missing_phases)}")
+        sample_times.append(phase_times)
+
+    return StartupMetrics(
+        **{f"{name}_time": float(np.mean([times[name] for times in sample_times])) for name in ("total", *phase_names)}
     )

@@ -53,12 +53,14 @@ def _make_sparse_solver(
 
 
 def test_rebuildable_sparse_s2_is_enabled(test, device):
+    """Verify S2 collider bases enable rebuildable sparse grids."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     solver = _make_sparse_solver(model, max_active_cell_count=4, collider_basis="S2")
     test.assertTrue(solver._sparse_rebuildable)
 
 
 def test_rebuildable_sparse_rejects_grid_warmstart(test, device):
+    """Verify rebuildable sparse grids reject grid-backed warm starts."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     for warmstart_mode in ("grid", "smoothed"):
         with (
@@ -69,6 +71,7 @@ def test_rebuildable_sparse_rejects_grid_warmstart(test, device):
 
 
 def test_rebuildable_sparse_auto_uses_particle_warmstart(test, device):
+    """Verify automatic warm starts use particles for rebuildable sparse grids."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
 
     rebuildable = _make_sparse_solver(model, max_active_cell_count=4, warmstart_mode="auto")
@@ -81,6 +84,7 @@ def test_rebuildable_sparse_auto_uses_particle_warmstart(test, device):
 
 
 def test_rebuildable_sparse_refreshes_retained_topologies(test, device):
+    """Verify retained function-space topologies rebuild in place."""
     del test, device
     geometry = object()
     topologies = [SimpleNamespace(rebuild=mock.Mock()) for _ in range(3)]
@@ -110,6 +114,7 @@ def test_rebuildable_sparse_refreshes_retained_topologies(test, device):
 
 
 def test_rebuildable_sparse_node_capacity_validation(test, device):
+    """Verify rebuildable sparse-grid node capacities reject invalid values."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     for name in ("max_leaf_node_count", "max_lower_node_count", "max_upper_node_count"):
         for value in (0, -2, True, 1.5):
@@ -118,6 +123,7 @@ def test_rebuildable_sparse_node_capacity_validation(test, device):
 
 
 def test_rebuildable_sparse_grid_reserves_explicit_hierarchy_capacity(test, device):
+    """Verify explicit sparse-grid hierarchy capacities are reserved."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     solver = _make_sparse_solver(
         model,
@@ -135,6 +141,7 @@ def test_rebuildable_sparse_grid_reserves_explicit_hierarchy_capacity(test, devi
 
 
 def test_rebuildable_sparse_automatic_hierarchy_respects_explicit_leaf(test, device):
+    """Verify automatic internal-node capacities respect an explicit leaf capacity."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     solver = _make_sparse_solver(model, max_active_cell_count=64, max_leaf_node_count=1)
 
@@ -145,6 +152,7 @@ def test_rebuildable_sparse_automatic_hierarchy_respects_explicit_leaf(test, dev
 
 
 def test_rebuildable_sparse_automatic_upper_capacity_respects_explicit_lower(test, device):
+    """Verify automatic upper-node capacity respects an explicit lower capacity."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     solver = _make_sparse_solver(model, max_active_cell_count=64, max_lower_node_count=1)
 
@@ -155,6 +163,7 @@ def test_rebuildable_sparse_automatic_upper_capacity_respects_explicit_lower(tes
 
 
 def test_rebuildable_sparse_rejects_inconsistent_hierarchy_capacity(test, device):
+    """Verify inconsistent sparse-grid hierarchy capacities are rejected."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01)])
     with test.assertRaisesRegex(ValueError, "capacity hierarchy"):
         _make_sparse_solver(
@@ -167,15 +176,17 @@ def test_rebuildable_sparse_rejects_inconsistent_hierarchy_capacity(test, device
 
 
 def test_rebuildable_sparse_grid_excludes_inactive_particles(test, device):
+    """Verify inactive particles do not contribute to sparse-grid construction."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01), (1000.01, 1000.01, 1000.01)], (1,))
     solver = _make_sparse_solver(model, max_active_cell_count=2)
 
     test.assertTrue(solver._sparse_rebuildable)
     test.assertEqual(solver._scratchpad.grid.cell_grid.get_active_stats().voxel_count, 1)
-    solver.check_status()
+    solver.check_sparse_grid_rebuild_status()
 
 
 def test_rebuildable_sparse_grid_excludes_deformable_collider_particles(test, device):
+    """Verify deformable collider particles are excluded from sparse-grid rebuilds."""
     positions = (
         (0.01, 0.01, 0.01),
         (0.02, 0.01, 0.01),
@@ -219,6 +230,7 @@ def test_rebuildable_sparse_grid_excludes_deformable_collider_particles(test, de
 
 
 def test_rebuildable_sparse_grid_excludes_nonfinite_particles_before_rebuild(test, device):
+    """Verify non-finite particles are excluded before sparse-grid rebuilds."""
     model = _make_particle_model(
         device,
         [(0.01, 0.01, 0.01), (1.01, 1.01, 1.01), (2.01, 2.01, 2.01), (3.01, 3.01, 3.01)],
@@ -248,7 +260,63 @@ def test_rebuildable_sparse_grid_excludes_nonfinite_particles_before_rebuild(tes
     np.testing.assert_array_equal(observed_point_masks[0], [1, 0, 0, 0])
 
 
+def test_rebuildable_sparse_preserves_inactive_particle_strain(test, device):
+    """Verify inactive particles keep their plastic, elastic strain and stress across a step.
+
+    Covers inactive particles next to active ones and inactive particles outside any active cell,
+    which get no quadrature point on a rebuildable grid.
+    """
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Y)
+    SolverImplicitMPM.register_custom_attributes(builder)
+    # Active block, inactive block in the neighboring cell, inactive block far from any active cell
+    for x0 in (0.025, 0.125, 1.125):
+        builder.add_particle_grid(
+            pos=wp.vec3(x0, 0.025, 0.025),
+            rot=wp.quat_identity(),
+            vel=wp.vec3(0.0),
+            dim_x=2,
+            dim_y=2,
+            dim_z=2,
+            cell_x=0.05,
+            cell_y=0.05,
+            cell_z=0.05,
+            mass=0.01,
+            jitter=0.0,
+            radius_mean=0.025,
+            custom_attributes={"mpm:young_modulus": 1.0e4, "mpm:poisson_ratio": 0.2, "mpm:hardening": 10.0},
+        )
+    model = builder.finalize(device=device)
+
+    x = model.particle_q.numpy()[:, 0]
+    adjacent = (x > 0.1) & (x < 1.0)
+    far = x > 1.0
+    flags = model.particle_flags.numpy()
+    flags[adjacent | far] &= ~int(newton.ParticleFlags.ACTIVE)
+    model.particle_flags.assign(flags)
+
+    solver = _make_sparse_solver(model, max_active_cell_count=64, warmstart_mode="particles")
+    state_0 = model.state()
+    state_1 = model.state()
+
+    particle_count = model.particle_count
+    jp = np.full(particle_count, 0.9, dtype=np.float32)
+    strain = np.tile(np.diag([1.01, 0.99, 1.0]).astype(np.float32), (particle_count, 1, 1))
+    stress = np.tile(np.diag([-10.0, -20.0, -30.0]).astype(np.float32), (particle_count, 1, 1))
+    state_0.mpm.particle_Jp.assign(jp)
+    state_0.mpm.particle_elastic_strain.assign(strain)
+    state_0.mpm.particle_stress.assign(stress)
+
+    solver.step(state_0, state_1, None, None, 0.001)
+
+    for name, inactive in (("adjacent", adjacent), ("far", far)):
+        with test.subTest(inactive=name):
+            np.testing.assert_array_equal(state_1.mpm.particle_Jp.numpy()[inactive], jp[inactive])
+            np.testing.assert_array_equal(state_1.mpm.particle_elastic_strain.numpy()[inactive], strain[inactive])
+            np.testing.assert_array_equal(state_1.mpm.particle_stress.numpy()[inactive], stress[inactive])
+
+
 def test_rebuildable_sparse_rebuild_uses_mpm_transfer_flags(test, device):
+    """Verify sparse-grid rebuilds use MPM transfer flags."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01), (1000.01, 1000.01, 1000.01)], (1,))
     solver = _make_sparse_solver(model, max_active_cell_count=2)
     state_in = model.state()
@@ -260,10 +328,11 @@ def test_rebuildable_sparse_rebuild_uses_mpm_transfer_flags(test, device):
     solver.step(state_in, state_out, None, None, 0.001)
 
     test.assertEqual(solver._scratchpad.grid.cell_grid.get_active_stats().voxel_count, 1)
-    solver.check_status()
+    solver.check_sparse_grid_rebuild_status()
 
 
 def test_rebuildable_sparse_grid_reserves_empty_capacity(test, device):
+    """Verify empty sparse grids retain their configured capacity."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01), (1.01, 1.01, 1.01)], (0, 1))
     solver = _make_sparse_solver(model, max_active_cell_count=4)
 
@@ -273,6 +342,7 @@ def test_rebuildable_sparse_grid_reserves_empty_capacity(test, device):
 
 
 def test_rebuildable_sparse_grid_reports_initial_overflow(test, device):
+    """Verify initial sparse-grid capacity overflow raises."""
     model = _make_particle_model(device, [(0.01, 0.01, 0.01), (1.01, 1.01, 1.01)])
 
     with test.assertRaisesRegex(RuntimeError, "sparse grid rebuild capacity"):
@@ -345,7 +415,7 @@ def _check_rebuildable_sparse_auto_gs_cuda_graph(test, device, collider_basis):
     for _ in range(2):
         wp.capture_launch(capture.graph)
 
-    solver.check_status()
+    solver.check_sparse_grid_rebuild_status()
     test.assertEqual(solver._scratchpad.grid.cell_grid.id, cell_grid_id)
     final_cell_count = grid.cell_grid.get_active_stats().voxel_count
     final_cells = {tuple(ijk) for ijk in grid.cell_grid.get_voxels().numpy()[:final_cell_count]}
@@ -362,6 +432,7 @@ def _check_rebuildable_sparse_auto_gs_cuda_graph(test, device, collider_basis):
 
 
 def test_rebuildable_sparse_auto_gs_cuda_graph(test, device):
+    """Verify automatic Gauss-Seidel matches eager execution under graph replay."""
     if not wp.is_mempool_enabled(device):
         test.skipTest("CUDA graph capture requires the Warp memory pool")
 
@@ -371,6 +442,7 @@ def test_rebuildable_sparse_auto_gs_cuda_graph(test, device):
 
 
 def test_rebuildable_sparse_cuda_graph_reports_overflow(test, device):
+    """Verify CUDA graph replay reports sparse-grid capacity overflow."""
     if not wp.is_mempool_enabled(device):
         test.skipTest("CUDA graph capture requires the Warp memory pool")
 
@@ -388,11 +460,78 @@ def test_rebuildable_sparse_cuda_graph_reports_overflow(test, device):
     wp.capture_launch(capture.graph)
 
     with test.assertRaisesRegex(RuntimeError, "sparse grid rebuild capacity"):
-        solver.check_status()
+        solver.check_sparse_grid_rebuild_status()
     status = int(solver._grid_accumulated_status.numpy()[0])
     test.assertTrue(status & wp.Volume.REBUILD_VOXEL_CAPACITY_EXCEEDED)
     solver._clear_sparse_grid_rebuild_status()
-    solver.check_status()
+    solver.check_sparse_grid_rebuild_status()
+
+
+def test_rebuildable_sparse_warmstarts_collider_impulses(test, device):
+    """Carry grid collider impulses across in-place rebuilds, matching a sparse grid allocated each step.
+
+    Two separate worlds with different gravities keep their own impulses, and a masked reset clears only one.
+    """
+    spacing = 0.025
+    local = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    SolverImplicitMPM.register_custom_attributes(local)
+    local.add_particle_grid(
+        pos=wp.vec3(0.0, 0.0, 0.5 * spacing),
+        rot=wp.quat_identity(),
+        vel=wp.vec3(0.0),
+        dim_x=8,
+        dim_y=8,
+        dim_z=12,
+        cell_x=spacing,
+        cell_y=spacing,
+        cell_z=spacing,
+        mass=spacing**3 * 1000.0,
+        jitter=0.0,
+        radius_mean=0.5 * spacing,
+        custom_attributes={"mpm:young_modulus": 1.0e5, "mpm:friction": 0.5},
+    )
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    SolverImplicitMPM.register_custom_attributes(builder)
+    builder.add_world(local)
+    builder.add_world(local)
+    builder.add_ground_plane()
+    model = builder.finalize(device=device)
+    model.set_gravity((0.0, 0.0, -20.0), world=1)
+    reset_mask = wp.array([False, True, False], dtype=wp.bool, device=device)
+
+    def settle(max_active_cell_count, capture=False):
+        # Few iterations cannot rebuild the ground's support from cold impulses.
+        config = SolverImplicitMPM.Config(
+            grid_type="sparse",
+            voxel_size=2.0 * spacing,
+            max_active_cell_count=max_active_cell_count,
+            collider_basis="S2",
+            warmstart_mode="particles",
+            max_iterations=10,
+            tolerance=0.0,
+            separate_worlds=True,
+        )
+        solver = SolverImplicitMPM(model, config, verbose=False)
+        state = model.state()
+        graph = None
+        if capture:
+            with wp.ScopedCapture(device=device) as capture_scope:
+                solver.step(state, state, None, None, 1.0 / 120.0)
+            graph = capture_scope.graph
+        for step in range(40):
+            if step == 20:
+                solver.reset(state, world_mask=reset_mask, flags=0)
+            if graph is None:
+                solver.step(state, state, None, None, 1.0 / 120.0)
+            else:
+                wp.capture_launch(graph)
+        return state.particle_q.numpy()
+
+    reference = settle(-1)
+    test.assertGreater(reference[:, 2].min(), -0.5 * spacing)
+    np.testing.assert_allclose(settle(8192), reference, atol=1.0e-6)
+    # Graphs captured before the first step keep the warm start across replays.
+    np.testing.assert_allclose(settle(8192, capture=True), reference, atol=1.0e-6)
 
 
 class TestImplicitMPMRebuildableSparse(unittest.TestCase):
@@ -488,6 +627,13 @@ add_function_test(
 )
 add_function_test(
     TestImplicitMPMRebuildableSparse,
+    "test_rebuildable_sparse_preserves_inactive_particle_strain",
+    test_rebuildable_sparse_preserves_inactive_particle_strain,
+    devices=devices,
+    check_output=False,
+)
+add_function_test(
+    TestImplicitMPMRebuildableSparse,
     "test_rebuildable_sparse_rebuild_uses_mpm_transfer_flags",
     test_rebuildable_sparse_rebuild_uses_mpm_transfer_flags,
     devices=devices,
@@ -518,6 +664,14 @@ add_function_test(
     TestImplicitMPMRebuildableSparse,
     "test_rebuildable_sparse_cuda_graph_reports_overflow",
     test_rebuildable_sparse_cuda_graph_reports_overflow,
+    devices=cuda_devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestImplicitMPMRebuildableSparse,
+    "test_rebuildable_sparse_warmstarts_collider_impulses",
+    test_rebuildable_sparse_warmstarts_collider_impulses,
     devices=cuda_devices,
     check_output=False,
 )

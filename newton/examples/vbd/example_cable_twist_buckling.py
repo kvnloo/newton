@@ -1,29 +1,32 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-###########################################################################
-# Cable Twist Buckling Link Verification
-#
-# Fixed-span dynamic VBD cable example:
-#
-#   1. build a straight cable with both tips fixed from the start
-#   2. let it settle briefly
-#   3. twist only the tip capsule about its local cable tangent
-#   4. hold the final twist as the centerline buckles into a helical crown
-#
-# There is no shortening ramp and no initial U-shaped/slack geometry. With a
-# sufficiently large gradual twist, the straight cable can still develop a
-# crown-like centerline wave. The test checks that the open-curve link quantity,
-# Lk = Tw + Wr, remains close to the commanded endpoint twist while self-contact
-# prevents strand passage.
-#
-# Run interactively:
-#   uv run --extra examples python -m newton.examples.vbd.example_cable_twist_buckling
-#
-# Run as a test:
-#   uv run --extra examples python -m newton.examples.vbd.example_cable_twist_buckling --test --viewer null
-#
-###########################################################################
+"""Cable Twist Buckling Link Verification
+
+Fixed-span dynamic VBD cable example:
+
+  1. build a straight cable with both tips fixed from the start
+  2. let it settle briefly
+  3. twist only the tip capsule about its local cable tangent
+  4. hold the final twist as the centerline buckles into a helical crown
+
+There is no shortening ramp and no initial U-shaped/slack geometry. With a
+sufficiently large gradual twist, the straight cable can still develop a
+crown-like centerline wave. The test checks that the open-curve link quantity,
+Lk = Tw + Wr, remains close to the commanded endpoint twist while self-contact
+prevents strand passage.
+
+Success criteria:
+- Both endpoints stay fixed in position as the tip twists about the cable tangent after an initial
+  settling period.
+- The initially straight cable develops a visible helical crown without a shortening ramp.
+- Twist transfers along the cable without abrupt material-frame jumps or excessive segment
+  stretching.
+- Self-contact prevents strand passage; inspect the final held crown from multiple views.
+
+Runs:
+- `python -m newton.examples cable_twist_buckling`
+"""
 
 import math
 
@@ -87,7 +90,7 @@ class Example:
     TOTAL_TIME = SETTLE_TIME + TWIST_TIME + HOLD_TIME
 
     STRETCH_STIFFNESS = 1.0e5
-    CONTACT_MODE = "hard-history"
+    CONTACT_MODE = "alm-history"
     CONTACT_STIFFNESS = 1.0e5
     CONTACT_DAMPING = 0.0
     CONTACT_GAP = 0.05
@@ -130,7 +133,7 @@ class Example:
         self.contact_stiffness = float(params["contact_stiffness"])
         self.contact_damping = float(params["contact_damping"])
         self.contact_gap = float(params["contact_gap"])
-        if self.contact_mode not in ("none", "soft", "hard", "hard-history"):
+        if self.contact_mode not in ("none", "alm", "alm-history"):
             raise ValueError(f"unknown contact_mode {self.contact_mode!r}")
         self.contact_enabled = self.contact_mode != "none"
 
@@ -160,10 +163,9 @@ class Example:
                 kd=self.contact_damping,
                 gap=self.contact_gap,
             )
+        rod = newton.Rod(points, radius=self.CABLE_RADIUS)
         bodies, joints = builder.add_rod(
-            positions=points,
-            quaternions=None,
-            radius=self.CABLE_RADIUS,
+            rod=rod,
             cfg=shape_cfg,
             stretch_stiffness=self.STRETCH_STIFFNESS,
             stretch_damping=0.0,
@@ -173,7 +175,6 @@ class Example:
             twist_damping=self.twist_damping,
             label="twist_buckling",
             wrap_in_articulation=False,
-            body_frame_origin="com",
         )
 
         self.bodies = list(map(int, bodies))
@@ -192,19 +193,14 @@ class Example:
 
         builder.color()
         self.model = builder.finalize()
-        hard_contact = self.contact_mode in ("hard", "hard-history")
-        contact_history = self.contact_mode == "hard-history"
+        contact_history = self.contact_mode == "alm-history"
         contact_matching = "latest" if contact_history else "disabled"
         self.collision_pipeline = newton.CollisionPipeline(self.model, contact_matching=contact_matching)
         self.contacts = self.collision_pipeline.contacts()
         self.solver = newton.solvers.SolverVBD(
             self.model,
             iterations=self.sim_iterations,
-            rigid_contact_hard=hard_contact,
             rigid_contact_history=contact_history,
-            rigid_contact_stick_motion_eps=0.0,
-            rigid_contact_stick_freeze_translation_eps=0.0,
-            rigid_contact_stick_freeze_angular_eps=0.0,
             rigid_body_contact_buffer_size=256,
         )
 

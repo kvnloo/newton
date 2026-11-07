@@ -3,6 +3,8 @@
 
 .. currentmodule:: newton
 
+.. _Coupled Solvers:
+
 Coupled Solvers
 ===============
 
@@ -94,6 +96,21 @@ notifications arrive. Direct writes through returned Warp arrays are not
 intercepted, so view-local edits should go through the coupled-solver API that
 owns the view.
 
+When an entry's selection forms closed topology, its view is compact: it holds
+only the entry's rows, grouped by world, with local indices. Each world keeps
+the rows the entry selects in that world, so worlds of one view may differ in
+size. Solvers that require identical worlds, such as
+:class:`~newton.solvers.SolverMuJoCo`, therefore need the same selection in
+every world. When an entry owns a body but not the body's incoming
+articulation joint from its parent body, the compact view gives the body a
+FREE joint to the world, like :meth:`~newton.ModelBuilder.add_joint_free`, so
+reduced-coordinate solvers move it as the root of its own articulation. A
+hidden FREE joint to the world likewise becomes an identical synthesized FREE
+joint. A hidden joint of any other type to the world, such as the fixed mount
+of an arm, stays out of the view: the body keeps no incoming joint, and
+``SolverCoupled`` logs a warning because no entry simulates that joint. Give
+such a joint to the entry that owns its child body to keep the attachment.
+
 Coupling Hooks
 --------------
 
@@ -113,6 +130,9 @@ The protocol currently covers these concepts:
   argument uses :class:`newton.StateFlags`. VBD uses this to realign private
   previous-pose state after proxy synchronization or ADMM iteration restarts.
   MPM uses it to keep collider caches consistent.
+- ``coupling_notify_iteration_restarts()`` tells a solver once after
+  construction whether the coupler may restart a step's solve, so a solver that
+  saves state for a restart can skip the save when none can follow.
 - ``coupling_eval_gravity_acceleration()`` lets a solver report the body and
   particle acceleration that it applies internally for gravity-like forces.
   Proxy and ADMM couplers pass these acceleration arrays explicitly to rewind
@@ -129,6 +149,13 @@ The protocol currently covers these concepts:
 - ``coupling_eval_effective_mass()`` and
   ``coupling_eval_effective_mass_block()`` let a solver provide endpoint
   effective mass instead of using raw model mass and inertia.
+- ``coupling_effective_mass_refresh_flags()`` names the
+  :class:`~newton.ModelFlags` after which a solver's effective masses need
+  refreshing. The default covers body, body inertial, joint DOF, armature and
+  reference-pose updates, and a solver can return a narrower set. Proxy and
+  ADMM couplers evaluate effective masses again after a notification that any
+  entry names. The evaluation runs on the host, so issue those notifications
+  outside graph capture.
 
 Force injection itself is not a hook. Couplers write into public
 ``state.body_f``, ``state.particle_f``, and ``control.joint_f`` buffers, then
@@ -207,15 +234,20 @@ usually better served by a custom harvest hook.
 Proxy-local collision detection is optional. A proxy can provide a
 ``collision_pipeline`` factory that receives the destination ``ModelView``. If
 the factory returns a pipeline, the coupler owns a persistent contact buffer and
-refreshes it at ``collide_interval``. If the factory returns ``None`` or no
-factory is supplied, the destination solve uses contacts passed to the outer
-``step()`` call.
+refreshes it at ``collide_interval``; inner proxy iterations reuse that result.
+Masked resets preserve both this cadence and cached contacts, and mark matching
+history for entities selected by the mask, including global entities when the
+final mask entry is set, for invalidation on the next refresh. If the factory
+returns ``None`` or no factory is supplied, the destination solve uses contacts
+passed to the outer ``step()`` call.
 
 The generic proxy loop currently supports at most two solver entries. Within
 that limit, body and particle mappings are grouped by ``(source,
 destination)``. One source step and one destination step are performed for each
 solver pair and proxy iteration, so a single proxy declaration can carry both
 body and particle mappings around the same destination solve.
+
+.. _ADMM coupling:
 
 ADMM Coupling
 -------------
@@ -242,7 +274,7 @@ objects. It does not currently accept arbitrary user-authored endpoint records
 as public API. Supported row sources are:
 
 - cross-solver model joints;
-- custom body-particle attachment attributes;
+- model particle-body attachments;
 - internally detected rigid-rigid, rigid-particle, and particle-particle
   contacts.
 
@@ -255,13 +287,19 @@ Revolute joints preserve the hinge axis and can add a dry-friction row from
 model joint friction. Prismatic, distance, and D6 joint rows are not yet part of
 the experimental API.
 
-Body-particle attachments cover interfaces that cannot be represented by a
-model joint because one endpoint is a particle. The helper
-``SolverCoupledADMM.add_body_particle_attachment()`` registers and fills custom
-attributes under ``coupling:body_particle_attachment`` with body id, particle id,
-body-local point, stiffness, damping, and enabled state. Importers can author the
-same custom attributes directly. Rows whose endpoints are unowned or owned by
-the same entry are ignored; only cross-solver attachments are coupled by ADMM.
+Particle-body attachments cover interfaces that cannot be represented by a
+model joint because one endpoint is a particle. The coupler reads the model
+attachment rows described under :ref:`Particle-body attachments` and owns those
+whose body and particle endpoints belong to different entries; rows owned
+entirely by one entry are left to that entry's solver. The coupler logs a warning
+if that solver does not support attachments or if an endpoint is owned by no
+entry. Rows authored under the legacy ``coupling:body_particle_attachment``
+custom frequency are also consumed by ADMM, so importers that write those
+attributes keep working; these legacy rows remain invisible to
+:class:`~newton.solvers.SolverVBD`.
+``SolverCoupledADMM.add_body_particle_attachment()`` is deprecated in favor of
+:meth:`newton.ModelBuilder.add_attachment_particle_body`, but keeps writing the
+legacy custom-row layout until it is removed.
 
 Contact coupling is enabled by adding one or more ``ContactPair`` values to
 ``SolverCoupledADMM.Config.contact_pairs``. A contact pair names two entries.
@@ -289,9 +327,18 @@ The main ADMM parameters are:
 - ``rho``: penalty weight for interface rows;
 - ``gamma``: proximal inertia and velocity weight;
 - ``baumgarte``: positional error stabilization for attachment/contact rows;
-- stiffness and damping values for model-joint and body-particle attachment
+- stiffness and damping values for model-joint and particle-body attachment
   rows;
 - rigid contact matching mode, thresholds, and warm-start force scale.
+
+ADMM detects cross-entry contacts with its own collision pipeline. Set
+``Config.contact_max_triangle_pairs`` to size its triangle-pair storage and
+``Config.contact_reduction_hashtable_size_factor`` to scale its contact-reduction
+hash table independently. Both default to ``None``, preserving the collision
+pipeline defaults. When rigid contact matching is ``"latest"`` or ``"sticky"``,
+the triangle-pair capacity must be less than ``2**20``. Larger capacities are
+allowed with matching disabled. Increase the hash table size factor when
+contact reduction needs more storage while retaining contact matching.
 
 When ``gamma`` is positive, the coupler scales owned body and particle masses in
 each entry ``ModelView``, asks sub-solvers to refresh model-derived caches, and
@@ -312,7 +359,7 @@ supports MPM transfer-active proxy particles and deformable collider particles.
 
 Use ADMM coupling when the interface should be represented as a symmetric
 constraint or frictional contact between entries. ADMM is better suited for
-cross-solver joints, body-particle attachments, and contact rows that need equal
+cross-solver joints, particle-body attachments, and contact rows that need equal
 and opposite forces. It is more structured, but it also has more tuning
 parameters and a narrower set of supported row types.
 
@@ -358,6 +405,34 @@ MuJoCo provides GPU effective-mass hooks from MuJoCo Warp data so proxy virtual
 inertia and ADMM endpoint weights can use articulated mass estimates rather than
 raw body mass.
 
+:class:`~newton.solvers.SolverSteel` can own rigid bodies and articulations as a
+proxy source or an ADMM entry. It consumes coupling forces through
+``state.body_f`` and reports articulated effective mass as the inverse of the
+axis mean of the endpoint mobility ``J H^-1 J^T``, where ``H`` is the tree-only
+joint-space mass matrix with armature at ``model.joint_q``; kinematic DOFs take
+the large armature that Steel's solve gives them. The endpoint is a body-frame
+offset from the body COM. The effective mass is evaluated on the host, so query
+it outside graph capture. Steel names body, body inertial, joint and joint DOF
+notifications in ``coupling_effective_mass_refresh_flags()``, so in a proxy or
+ADMM coupler with a Steel entry issue those outside graph capture too. When the
+coupler runs more than one iteration, Steel's next step after a coupler state
+write saves the friction-patch history; after an iteration restart, it restores
+the saved copy instead, so repeated solves of one step start from the same
+history. Both run inside the step, so a graph captured from the coupled step
+records them; a reset cancels both. Owning particles raises
+:class:`NotImplementedError` when the coupled solver is constructed. Sleeping,
+contact warm starting, contact compliance, contact torsion and
+``deterministic=wp.DeterministicMode.RUN_TO_RUN`` raise it there too, and so
+does ``update_mass_matrix_interval`` above 1 when the coupler runs more than
+one iteration; a standalone Steel on a ``ModelView`` keeps these options. The
+coupler routes contacts and sums coupling forces with atomics, so the contact
+order that run-to-run mode relies on is not fixed inside it. Acting as a proxy
+destination raises :class:`NotImplementedError` on the first coupled step.
+Coupled use is validated with ``solve_mode="matrix_free"`` and the
+``"immediate"`` articulated contact response. Set ``model.rigid_contact_max`` to the capacity of
+the coupled contact buffer before constructing the coupled solver, because Steel
+sizes its contact scratch from the model.
+
 Current Limitations
 -------------------
 
@@ -376,6 +451,11 @@ The coupled-solver framework is useful today, but it is still experimental:
   custom hook is available.
 - USD ownership, automatic coupled-solver construction, and high-level tuning
   guidance are not part of the experimental public API yet.
+- Full-surface (edge/face) rigid-soft contacts are consumed by
+  :class:`~newton.solvers.SolverVBD` only. The per-entry contact filter drops
+  them for other sub-solvers while preserving particle contacts, and keeps them
+  for VBD only when the entry owns every referenced corner. A record spanning
+  two entries is dropped by both. Proxy particles do not support them at all.
 
 Treat coupled solvers as an advanced feature for controlled experiments and
 solver integration work. Prefer focused regression tests and explicit scene
