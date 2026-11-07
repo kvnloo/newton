@@ -241,6 +241,75 @@ class TestMuJoCoReset(unittest.TestCase):
         """Advance the complete batch when Newton state also resides on CPU."""
         self._assert_native_cpu_steps_all_worlds_with_row_local_forces(_build_two_world_model(device="cpu"))
 
+
+    def test_native_cpu_asymmetric_reset_masks_causal_buffers(self):
+        """Reset selected native worlds without touching the other world's causal buffers."""
+        model = _build_two_world_model(world_count=2, device="cpu")
+        solver = SolverMuJoCo(model, separate_worlds=True, use_mujoco_cpu=True)
+        self.assertEqual(len(solver.mj_data_by_world), 2)
+
+        buffer_names = ("qacc_warmstart", "qfrc_applied", "xfrc_applied", "ctrl", "act")
+        for mask, expected in (
+            ((False, True, False), (11.0, 0.0)),
+            ((True, False, False), (0.0, 22.0)),
+            ((False, False, True), (11.0, 22.0)),
+        ):
+            with self.subTest(mask=mask):
+                for world, data in enumerate(solver.mj_data_by_world):
+                    for name in buffer_names:
+                        buffer = getattr(data, name)
+                        if buffer.size:
+                            buffer[:] = (11.0, 22.0)[world]
+
+                solver.reset(
+                    model.state(),
+                    world_mask=wp.array(mask, dtype=wp.bool, device=model.device),
+                    flags=0,
+                )
+
+                for world, data in enumerate(solver.mj_data_by_world):
+                    for name in buffer_names:
+                        buffer = getattr(data, name)
+                        if buffer.size:
+                            np.testing.assert_array_equal(
+                                buffer,
+                                expected[world],
+                                err_msg=f"{name}, world={world}, mask={mask}",
+                            )
+
+    def test_native_cpu_gravity_returns_newton_velocity_rows(self):
+        """A CPU step must publish both row-local native velocities to Newton state."""
+        model = _build_two_world_model(world_count=2, device="cpu")
+        gravity = model.gravity.numpy()
+        gravity[0] = (0.0, 0.0, -1.0)
+        gravity[1] = (0.0, 0.0, -3.0)
+        model.gravity.assign(gravity)
+
+        solver = SolverMuJoCo(
+            model, separate_worlds=True, use_mujoco_cpu=True, disable_contacts=True
+        )
+        state_in, state_out = model.state(), model.state()
+        state_in.body_f = None
+        solver.step(state_in, state_out, None, None, 0.01)
+
+        expected = (-0.01, -0.03)
+        self.assertEqual(len(solver.mj_data_by_world), 2)
+        np.testing.assert_allclose(
+            [data.qvel[2] for data in solver.mj_data_by_world],
+            expected,
+            rtol=0,
+            atol=1.0e-6,
+        )
+
+        dofs_per_world = model.joint_dof_count // model.world_count
+        returned_qd = state_out.joint_qd.numpy()
+        np.testing.assert_allclose(
+            [returned_qd[2], returned_qd[dofs_per_world + 2]],
+            expected,
+            rtol=0,
+            atol=1.0e-6,
+        )
+
     def test_reset_all_worlds(self):
         """A ``None`` mask clears every world."""
         self._setup_stepped_solver()
