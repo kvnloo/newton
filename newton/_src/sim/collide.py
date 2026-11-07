@@ -717,7 +717,7 @@ class _RigidContactCountEstimate:
     source: Literal["fallback", "minimum", "neighbor heuristic", "precomputed pairs"]
 
 
-def _estimate_rigid_contact_details(model: Model) -> _RigidContactCountEstimate:
+def _estimate_rigid_contact_details(model: Model, included_pair_count: int = 0) -> _RigidContactCountEstimate:
     """Estimate rigid-contact capacity and retain its diagnostic inputs.
 
     Uses a linear neighbor-budget estimate assuming each non-plane shape contacts
@@ -732,6 +732,8 @@ def _estimate_rigid_contact_details(model: Model) -> _RigidContactCountEstimate:
 
     Args:
         model: The simulation model.
+        included_pair_count: Number of force-included shape pairs, added
+            conservatively to the model's automatic pair count.
 
     Returns:
         The estimated capacity and its diagnostic inputs.
@@ -826,10 +828,13 @@ def _estimate_rigid_contact_details(model: Model) -> _RigidContactCountEstimate:
     # When precomputed contact pairs are available, use as a tighter bound.
     if pair_count > 0:
         weighted_cpp = max(avg_cpp, _RIGID_CONTACTS_PER_PRIMITIVE_PAIR)
-        pair_contacts = pair_count * weighted_cpp
+        pair_contacts = (pair_count + included_pair_count) * weighted_cpp
         total_contacts = min(total_contacts, pair_contacts)
         if pair_contacts < heuristic_contacts:
             source = "precomputed pairs"
+
+    # Explicit inclusions bypass model pair filters; never cap them away.
+    total_contacts = max(total_contacts, included_pair_count * max(avg_cpp, _RIGID_CONTACTS_PER_PRIMITIVE_PAIR))
 
     # Ensure minimum allocation
     capacity = max(_RIGID_CONTACT_MIN_CAPACITY, total_contacts)
@@ -847,9 +852,9 @@ def _estimate_rigid_contact_details(model: Model) -> _RigidContactCountEstimate:
     )
 
 
-def _estimate_rigid_contact_max(model: Model) -> int:
+def _estimate_rigid_contact_max(model: Model, included_pair_count: int = 0) -> int:
     """Estimate the rigid-contact capacity for the collision pipeline."""
-    return _estimate_rigid_contact_details(model).capacity
+    return _estimate_rigid_contact_details(model, included_pair_count).capacity
 
 
 def _warn_large_rigid_contact_estimate(estimate: _RigidContactCountEstimate) -> None:
@@ -1343,6 +1348,55 @@ def _infer_broad_phase_mode_from_instance(broad_phase: BroadPhaseAllPairs | Broa
     )
 
 
+def _prepare_included_shape_pairs(
+    model: Model,
+    shape_pairs_included: wp.array[wp.vec2i] | None,
+) -> np.ndarray:
+    """Validate and canonicalize shape pairs that bypass automatic filtering."""
+    if shape_pairs_included is None or len(shape_pairs_included) == 0:
+        return np.empty((0, 2), dtype=np.int32)
+
+    pairs = np.asarray(shape_pairs_included.numpy(), dtype=np.int32)
+    if pairs.ndim != 2 or pairs.shape[1] != 2:
+        raise ValueError("shape_pairs_included must have shape (pair_count, 2)")
+    if np.any(pairs < 0) or np.any(pairs >= model.shape_count):
+        raise ValueError("shape_pairs_included contains an invalid shape index")
+    if np.any(pairs[:, 0] == pairs[:, 1]):
+        raise ValueError("shape_pairs_included cannot contain self-pairs")
+
+    pairs = np.sort(pairs, axis=1)
+    pairs = np.unique(pairs, axis=0)
+
+    shape_world = getattr(model, "shape_world", None)
+    if shape_world is not None:
+        worlds = shape_world.numpy()[pairs]
+        incompatible = (worlds[:, 0] >= 0) & (worlds[:, 1] >= 0) & (worlds[:, 0] != worlds[:, 1])
+        if np.any(incompatible):
+            raise ValueError("shape_pairs_included cannot pair shapes from different worlds")
+
+    variant_options = _variant_options(model)
+    shape_flags = model._shape_option_flags() if variant_options is not None else getattr(model, "shape_flags", None)
+    if shape_flags is not None:
+        flags = shape_flags.numpy()
+        if not np.all((flags[pairs] & int(ShapeFlags.COLLIDE_SHAPES)) != 0):
+            raise ValueError("shape_pairs_included requires ShapeFlags.COLLIDE_SHAPES on both shapes")
+        hydroelastic = (flags[pairs] & int(ShapeFlags.HYDROELASTIC)) != 0
+        if np.any(np.all(hydroelastic, axis=1)):
+            raise ValueError("shape_pairs_included does not support hydroelastic shape pairs")
+
+    return pairs
+
+
+def _merge_shape_pairs(*pair_arrays: np.ndarray) -> np.ndarray:
+    """Return sorted unique shape pairs from non-empty host arrays."""
+    nonempty = [pairs for pairs in pair_arrays if len(pairs) > 0]
+    if not nonempty:
+        return np.empty((0, 2), dtype=np.int32)
+    pairs = np.concatenate(nonempty, axis=0)
+    pairs = np.sort(pairs, axis=1)
+    return np.unique(pairs, axis=0)
+
+
 def _world_compatible_pairs(
     feature_world: np.ndarray,
     shape_world: np.ndarray,
@@ -1589,6 +1643,7 @@ class CollisionPipeline:
         rigid_contact_max: int | None = None,
         max_triangle_pairs: int | None = None,
         shape_pairs_filtered: wp.array[wp.vec2i] | None = None,
+        shape_pairs_included: wp.array[wp.vec2i] | None = None,
         include_static_kinematic_pairs: bool = True,
         soft_contact_max: int | None = None,
         soft_contact_gap: float | None = None,
@@ -1704,6 +1759,9 @@ class CollisionPipeline:
                 "nxn"/"sap" modes, ignored. The pair count and shape-type routing are used to size
                 and specialize internal buffers at construction, so do not modify or resize the
                 array while the pipeline is in use. Rebuild the pipeline after changing the pairs.
+            shape_pairs_included: Pairs forced through broad-phase selection even when filtered by groups or
+                shape collision filters. They still use Newton's shape margins and gaps, not MuJoCo's
+                pair-specific contact detection envelope. Rebuild the pipeline after changing pair topology.
             include_static_kinematic_pairs: Whether to generate contacts for static-kinematic and
                 kinematic-kinematic pairs. Set to ``False`` to filter those pairs. Static-static pairs are
                 always filtered. Defaults to ``True`` for backward compatibility.
@@ -1840,6 +1898,8 @@ class CollisionPipeline:
         self._contact_sort_shape_index_bits = contact_sort_shape_index_bits(shape_count)
         device = model.device
         using_expert_components = broad_phase_instance is not None or narrow_phase is not None
+        included_pairs = _prepare_included_shape_pairs(model, shape_pairs_included)
+        included_pair_count = len(included_pairs)
 
         # Resolve rigid contact capacity with explicit > model > estimated precedence.
         if rigid_contact_max is None:
@@ -1847,7 +1907,7 @@ class CollisionPipeline:
             if model_rigid_contact_max is not None:
                 rigid_contact_max = model_rigid_contact_max
             else:
-                rigid_contact_estimate = _estimate_rigid_contact_details(model)
+                rigid_contact_estimate = _estimate_rigid_contact_details(model, included_pair_count)
                 rigid_contact_max = rigid_contact_estimate.capacity
                 _warn_large_rigid_contact_estimate(rigid_contact_estimate)
         self._rigid_contact_max = rigid_contact_max
@@ -1914,6 +1974,12 @@ class CollisionPipeline:
                         "shape_pairs_filtered must be provided for explicit broad phase "
                         "(or set model.shape_contact_pairs)"
                     )
+                if included_pair_count:
+                    shape_pairs_filtered = wp.array(
+                        _merge_shape_pairs(shape_pairs_filtered.numpy().reshape(-1, 2), included_pairs),
+                        dtype=wp.vec2i,
+                        device=device,
+                    )
                 self.shape_pairs_filtered = shape_pairs_filtered
                 self.shape_pairs_max = len(shape_pairs_filtered)
                 self.shape_pairs_excluded = None
@@ -1922,9 +1988,18 @@ class CollisionPipeline:
             else:
                 self.shape_pairs_filtered = None
                 self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
-                self.shape_pairs_excluded = self._build_excluded_pairs(model)
+                # The included pass writes first; exclude those pairs from the automatic pass.
+                self.shape_pairs_excluded = self._build_excluded_pairs(
+                    model, included_pairs if included_pair_count else None
+                )
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
+                )
+
+            if self.shape_pairs_max < included_pair_count:
+                raise ValueError(
+                    "Collision candidate capacity must be at least the number of shape_pairs_included "
+                    f"(got {self.shape_pairs_max} < {included_pair_count})"
                 )
 
             if deterministic and not narrow_phase.deterministic:
@@ -1959,6 +2034,12 @@ class CollisionPipeline:
                         "(or set model.shape_contact_pairs)"
                     )
                 self.broad_phase = BroadPhaseExplicit()
+                if included_pair_count > 0:
+                    filtered_pairs = _merge_shape_pairs(
+                        np.asarray(shape_pairs_filtered.numpy(), dtype=np.int32),
+                        included_pairs,
+                    )
+                    shape_pairs_filtered = wp.array(filtered_pairs, dtype=wp.vec2i, device=device)
                 self.shape_pairs_filtered = shape_pairs_filtered
                 self.shape_pairs_max = len(shape_pairs_filtered)
                 self.shape_pairs_excluded = None
@@ -1971,7 +2052,10 @@ class CollisionPipeline:
                 self.broad_phase = BroadPhaseAllPairs(shape_world, shape_flags=shape_flags, device=device)
                 self.shape_pairs_filtered = None
                 self.shape_pairs_max = _resolve_shape_pairs_max(model, shape_pairs_max)
-                self.shape_pairs_excluded = self._build_excluded_pairs(model)
+                self.shape_pairs_excluded = self._build_excluded_pairs(
+                    model,
+                    included_pairs if included_pair_count > 0 else None,
+                )
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
                 )
@@ -1981,12 +2065,21 @@ class CollisionPipeline:
                 self.broad_phase = BroadPhaseSAP(shape_world, shape_flags=shape_flags, sort_type="auto", device=device)
                 self.shape_pairs_filtered = None
                 self.shape_pairs_max = _resolve_shape_pairs_max(model, shape_pairs_max)
-                self.shape_pairs_excluded = self._build_excluded_pairs(model)
+                self.shape_pairs_excluded = self._build_excluded_pairs(
+                    model,
+                    included_pairs if included_pair_count > 0 else None,
+                )
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
                 )
             else:
                 raise ValueError(f"Unsupported broad phase mode: {self.broad_phase_mode}")
+
+            if self.shape_pairs_max < included_pair_count:
+                raise ValueError(
+                    "Collision candidate capacity must be at least the number of shape_pairs_included "
+                    f"(got {self.shape_pairs_max} < {included_pair_count})"
+                )
 
             if self._speculative_enabled:
                 shape_flags_np = model.shape_flags.numpy()
@@ -2281,6 +2374,12 @@ class CollisionPipeline:
         if self.hydroelastic_sdf is not None:
             # Model SDF descriptors are finalized here; only shape transforms change per frame.
             self.hydroelastic_sdf._prepare_shape_sdf_data(model._texture_sdf_data, model._shape_sdf_index)
+
+        self.shape_pairs_included = (
+            wp.array(included_pairs, dtype=wp.vec2i, device=device) if included_pair_count > 0 else None
+        )
+        self.shape_pairs_included_count = included_pair_count
+        self._included_broad_phase = BroadPhaseExplicit() if included_pair_count > 0 else None
 
         # Allocate buffers
         with wp.ScopedDevice(device):
@@ -2792,8 +2891,13 @@ class CollisionPipeline:
             self._contact_matcher.reset(world_mask)
 
     @staticmethod
-    def _build_excluded_pairs(model: Model) -> wp.array[wp.vec2i] | None:
+    def _build_excluded_pairs(
+        model: Model,
+        shape_pairs_included: np.ndarray | None = None,
+    ) -> wp.array[wp.vec2i] | None:
         sorted_pairs = model.shape_collision_filter_pairs_array()
+        if shape_pairs_included is not None:
+            sorted_pairs = _merge_shape_pairs(sorted_pairs, shape_pairs_included)
         if sorted_pairs.shape[0] == 0:
             return None
         return wp.array(
@@ -2944,6 +3048,24 @@ class CollisionPipeline:
             device=self.device,
             record_tape=False,
         )
+
+        # Write force-included pairs first so a tight candidate buffer cannot
+        # let automatic pairs displace them.
+        if self._included_broad_phase is not None and self.broad_phase_mode != "explicit":
+            self._included_broad_phase.launch(
+                self.narrow_phase.shape_aabb_lower,
+                self.narrow_phase.shape_aabb_upper,
+                None,
+                self.shape_pairs_included,
+                self.shape_pairs_included_count,
+                self.broad_phase_shape_pairs,
+                self.broad_phase_pair_count,
+                shape_body=model.shape_body,
+                body_flags=model.body_flags,
+                include_static_kinematic_pairs=self.include_static_kinematic_pairs,
+                device=self.device,
+                skip_count_zero=True,
+            )
 
         if speculative_active:
             wp.launch(

@@ -775,6 +775,12 @@ Explicit broad-phase setup warns when the configured list contains more than
 including shared global pairs. These pairs are tested on every collision update;
 consider SAP for large worlds.
 
+``shape_pairs_included`` adds fixed pairs to any broad phase even when
+collision groups or pair filters exclude them. The pipeline deduplicates
+these pairs from its automatic candidates and still applies AABB overlap,
+shape collision flags, and the configured static/kinematic filtering.
+Force-including hydroelastic pairs is not supported.
+
 .. testsetup:: broad-phase
 
     import warp as wp
