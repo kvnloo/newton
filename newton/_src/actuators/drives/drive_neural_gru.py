@@ -250,7 +250,7 @@ def _read_graph_interface(model_path: str) -> _GRUGraphInterface:
             f"DriveNeuralGRU checkpoint '{model_path}' network input must have shape [1, batch, input_size]"
         )
 
-    return _GRUGraphInterface(
+    interface = _GRUGraphInterface(
         input_name=data_inputs[0].name,
         input_size=int(input_dims[2].dim_value),
         hidden_in_names=tuple(hidden_in_names),
@@ -258,6 +258,161 @@ def _read_graph_interface(model_path: str) -> _GRUGraphInterface:
         hidden_size=hidden_sizes.pop(),
         output_name=effort_outputs[0],
     )
+    _validate_independent_lanes(onnx, graph, interface, model_path)
+    return interface
+
+def _validate_independent_lanes(onnx: Any, graph: Any, interface: _GRUGraphInterface, model_path: str) -> None:
+    """Reject effort outputs without GRU ancestry or provably independent lanes.
+
+    A sum-of-outputs VJP equals the desired per-lane Jacobian diagonal only if
+    one actuator's output cannot depend on another actuator's network input.
+    Unsupported tensor operations therefore fail closed.
+    """
+    producers = {
+        name: index for index, node in enumerate(graph.node) for name in node.output if name
+    }
+    visited: set[str] = set()
+    reachable: set[int] = set()
+    pending = [interface.output_name]
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        index = producers.get(name)
+        if index is not None:
+            reachable.add(index)
+            pending.extend(value for value in graph.node[index].input if value)
+
+    if not any(graph.node[index].op_type == "GRU" for index in reachable):
+        raise ValueError(
+            f"DriveNeuralGRU checkpoint '{model_path}' effort output does not depend on a GRU node"
+        )
+
+    initializers = {tensor.name: tensor for tensor in graph.initializer}
+    constants: dict[str, Any] = {}
+    # Each value's actuator-lane axis (None for constants) and tensor rank.
+    shapes: dict[str, tuple[int | None, int]] = {
+        interface.input_name: (1, 3),
+        **{name: (1, 3) for name in interface.hidden_in_names},
+        **{name: (None, len(tensor.dims)) for name, tensor in initializers.items()},
+    }
+
+    def reject(op: str) -> None:
+        raise ValueError(
+            f"DriveNeuralGRU checkpoint '{model_path}' cannot prove independent actuator lanes "
+            f"through ONNX {op}"
+        )
+
+    def shape(name: str, op: str) -> tuple[int | None, int]:
+        if name not in shapes:
+            reject(op)
+        return shapes[name]
+
+    def axes_of(node: Any, rank: int, *, unsqueeze: bool = False) -> tuple[int, ...]:
+        attribute = next((item for item in node.attribute if item.name == "axes"), None)
+        if attribute is not None:
+            axes = tuple(int(value) for value in attribute.ints)
+        elif len(node.input) > 1:
+            tensor = initializers.get(node.input[1])
+            if tensor is None:
+                tensor = constants.get(node.input[1])
+            if tensor is None:
+                reject(node.op_type)
+            axes = tuple(int(value) for value in onnx.numpy_helper.to_array(tensor).reshape(-1))
+        else:
+            reject(node.op_type)
+        target_rank = rank + len(axes) if unsqueeze else rank
+        axes = tuple(axis + target_rank if axis < 0 else axis for axis in axes)
+        if len(set(axes)) != len(axes) or any(axis < 0 or axis >= target_rank for axis in axes):
+            reject(node.op_type)
+        return axes
+
+    for index, node in enumerate(graph.node):
+        if index not in reachable:
+            continue
+        op = node.op_type
+        if op == "Constant":
+            attribute = next((item for item in node.attribute if item.name == "value"), None)
+            if attribute is None or len(node.output) != 1:
+                reject(op)
+            constants[node.output[0]] = attribute.t
+            result = (None, len(attribute.t.dims))
+        elif op == "GRU":
+            if (
+                len(node.input) <= 5
+                or len(node.output) <= 1
+                or shape(node.input[0], op) != (1, 3)
+                or shape(node.input[5], op) != (1, 3)
+            ):
+                reject(op)
+            # GRU Y: [sequence, direction, batch, hidden];
+            # GRU Y_h: [direction, batch, hidden].
+            shapes[node.output[0]] = (2, 4)
+            shapes[node.output[1]] = (1, 3)
+            continue
+        elif op in {
+            "Identity", "Tanh", "Relu", "Sigmoid", "Exp", "Log", "Sqrt", "Abs",
+            "Neg", "Elu", "LeakyRelu", "Softplus", "Cast",
+        }:
+            result = shape(node.input[0], op)
+        elif op == "Squeeze":
+            lane, rank = shape(node.input[0], op)
+            axes = axes_of(node, rank)
+            if lane in axes:
+                reject(op)
+            result = (
+                None if lane is None else lane - sum(axis < lane for axis in axes),
+                rank - len(axes),
+            )
+        elif op == "Unsqueeze":
+            lane, rank = shape(node.input[0], op)
+            axes = axes_of(node, rank, unsqueeze=True)
+            retained = [axis for axis in range(rank + len(axes)) if axis not in axes]
+            result = (None if lane is None else retained[lane], rank + len(axes))
+        elif op == "Transpose":
+            lane, rank = shape(node.input[0], op)
+            attribute = next((item for item in node.attribute if item.name == "perm"), None)
+            permutation = tuple(attribute.ints) if attribute is not None else tuple(reversed(range(rank)))
+            if sorted(permutation) != list(range(rank)):
+                reject(op)
+            result = (None if lane is None else permutation.index(lane), rank)
+        elif op == "Gemm":
+            lane, rank = shape(node.input[0], op)
+            transposed_a = next((item.i for item in node.attribute if item.name == "transA"), 0)
+            if (lane, rank) != (0, 2) or transposed_a or any(
+                shape(name, op)[0] is not None for name in node.input[1:] if name
+            ):
+                reject(op)
+            result = (0, 2)
+        elif op == "MatMul":
+            left_lane, left_rank = shape(node.input[0], op)
+            right_lane, right_rank = shape(node.input[1], op)
+            if (
+                left_lane is None or left_lane != left_rank - 2
+                or right_lane is not None or right_rank != 2
+            ):
+                reject(op)
+            result = (left_lane, left_rank)
+        elif op in {"Add", "Sub", "Mul", "Div", "Pow", "Max", "Min"}:
+            inputs = [shape(name, op) for name in node.input if name]
+            rank = max(input_rank for _, input_rank in inputs)
+            lane_axes = {
+                lane + rank - input_rank
+                for lane, input_rank in inputs if lane is not None
+            }
+            if len(lane_axes) > 1:
+                reject(op)
+            result = (next(iter(lane_axes)) if lane_axes else None, rank)
+        else:
+            reject(op)
+
+        if len(node.output) != 1 or not node.output[0]:
+            reject(op)
+        shapes[node.output[0]] = result
+
+    if shape(interface.output_name, "effort output") != (0, 2):
+        reject("effort output")
 
 
 class DriveNeuralGRU(DriveBase):
@@ -319,7 +474,10 @@ class DriveNeuralGRU(DriveBase):
     input of shape ``[1, N, F]`` and, for every ``GRU`` node, an ``initial_h``
     graph input of shape ``[1, N, hidden_size]``. It returns one scalar effort
     of shape ``[N, 1]`` and, for every ``GRU`` node, its ``Y_h`` as a graph
-    output.
+    output. The effort must descend from a GRU, and its data path must
+    preserve independent actuator lanes. Batch-coupling and unsupported
+    shape transforms are rejected because implicit mode uses a summed
+    reverse-mode seed rather than a full per-lane Jacobian.
 
     .. warning::
 

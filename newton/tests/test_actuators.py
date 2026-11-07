@@ -1538,6 +1538,134 @@ class TestDriveNeuralGRU(unittest.TestCase):
         self.assertEqual(parsed.drive_class, DriveNeuralGRU)
         self.assertEqual(os.path.realpath(parsed.drive_kwargs["model_path"]), os.path.realpath(model_path))
 
+
+    def test_cpu_gru_implicit_feature_signs(self):
+        """Pin normalized state derivatives in the production Warp CPU kernel."""
+        from newton._src.actuators.drives.drive_neural_gru import (
+            _FEATURE_POSITION,
+            _FEATURE_POSITION_ERROR,
+            _FEATURE_TARGET_POSITION,
+            _FEATURE_VELOCITY,
+            _FEATURE_VELOCITY_ERROR,
+            _effort_and_slopes_kernel,
+        )
+
+        device = wp.get_device("cpu")
+        feature_codes = wp.array(
+            [
+                _FEATURE_POSITION, _FEATURE_POSITION_ERROR,
+                _FEATURE_VELOCITY, _FEATURE_VELOCITY_ERROR,
+                _FEATURE_TARGET_POSITION,
+            ],
+            dtype=wp.int32,
+            device=device,
+        )
+        stds = wp.array([2.0, 2.0, 4.0, 4.0, 1.0], dtype=wp.float32, device=device)
+        gradients = wp.array(
+            np.array(
+                [[[2.0, 0.0, 0.0, 0.0, 100.0],
+                  [0.0, 1.0, 0.0, 2.0, 100.0],
+                  [2.0, 2.0, 4.0, 4.0, 100.0]]],
+                dtype=np.float32,
+            ),
+            dtype=wp.float32,
+            ndim=3,
+            device=device,
+        )
+        network_output = wp.array(
+            np.full((3, 1), 0.5, dtype=np.float32),
+            dtype=wp.float32,
+            ndim=2,
+            device=device,
+        )
+        tau = wp.zeros(3, dtype=wp.float32, device=device)
+        dq = wp.zeros(3, dtype=wp.float32, device=device)
+        dqd = wp.zeros(3, dtype=wp.float32, device=device)
+        wp.launch(
+            _effort_and_slopes_kernel,
+            dim=3,
+            inputs=[network_output, gradients, feature_codes, stds, 1.0, 4.0],
+            outputs=[tau, dq, dqd],
+            device=device,
+        )
+        np.testing.assert_allclose(tau.numpy(), [3.0, 3.0, 3.0], atol=1e-6, rtol=0)
+        np.testing.assert_allclose(dq.numpy(), [4.0, -2.0, 0.0], atol=1e-6, rtol=0)
+        np.testing.assert_allclose(dqd.numpy(), [0.0, -2.0, 0.0], atol=1e-6, rtol=0)
+
+    def test_cpu_gru_rejects_disconnected_effort_output(self):
+        """Reject an ONNX Constant effort head that has no GRU ancestor."""
+        onnx, TensorProto, helper, numpy_helper = _onnx_modules()
+        source = self._save_gru("connected_effort.onnx", apply_tanh=False, output_scale=1.0)
+
+        def detach_effort(model):
+            model.graph.node.append(
+                helper.make_node(
+                    "Constant", [], ["detached_effort"],
+                    value=numpy_helper.from_array(np.array([[2.0]], dtype=np.float32)),
+                )
+            )
+            model.graph.output[0].CopyFrom(
+                helper.make_tensor_value_info("detached_effort", TensorProto.FLOAT, [1, 1])
+            )
+            onnx.checker.check_model(model)
+
+        path = self._mutate_gru(source, "disconnected_effort.onnx", detach_effort)
+        with self.assertRaisesRegex(ValueError, "effort output does not depend on a GRU"):
+            DriveNeuralGRU(path)
+
+    def test_cpu_gru_rejects_coupled_onnx_jacobian(self):
+        """Prove that two-lane ONNX coupling makes summed VJP differ from diagonal."""
+        from onnx.reference import ReferenceEvaluator  # noqa: PLC0415
+
+        onnx, TensorProto, helper, numpy_helper = _onnx_modules()
+        coupling = np.array([[2.0, 3.0], [5.0, 7.0]], dtype=np.float32)
+        source = self._save_gru(
+            "independent_gru.onnx",
+            metadata=self._metadata(("position",)),
+            apply_tanh=False,
+            output_scale=1.0,
+        )
+
+        def couple_effort(model):
+            head = model.graph.output[0].name
+            model.graph.initializer.append(numpy_helper.from_array(coupling, name="coupling"))
+            model.graph.node.append(helper.make_node("MatMul", ["coupling", head], ["coupled_effort"]))
+            model.graph.output[0].CopyFrom(
+                helper.make_tensor_value_info("coupled_effort", TensorProto.FLOAT, [2, 1])
+            )
+            onnx.checker.check_model(model)
+
+        path = self._mutate_gru(source, "coupled_gru.onnx", couple_effort)
+        with self.assertRaisesRegex(ValueError, "independent actuator lanes.*MatMul"):
+            DriveNeuralGRU(path)
+
+        graph = helper.make_graph(
+            [helper.make_node("MatMul", ["coupling", "lane_input"], ["lane_effort"])],
+            "two_lane_jacobian",
+            [helper.make_tensor_value_info("lane_input", TensorProto.FLOAT, [2, 1])],
+            [helper.make_tensor_value_info("lane_effort", TensorProto.FLOAT, [2, 1])],
+            initializer=[numpy_helper.from_array(coupling, name="coupling")],
+        )
+        witness = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        onnx.checker.check_model(witness)
+        evaluate = ReferenceEvaluator(witness)
+        x = np.array([[0.5], [-0.25]], dtype=np.float32)
+        observed = evaluate.run(["lane_effort"], {"lane_input": x})[0]
+        np.testing.assert_allclose(observed[:, 0], [0.25, 0.75], rtol=0, atol=1e-6)
+
+        eps = 0.125
+        jacobian = np.zeros((2, 2), dtype=np.float32)
+        for lane in range(2):
+            delta = np.zeros_like(x)
+            delta[lane, 0] = eps
+            positive = evaluate.run(["lane_effort"], {"lane_input": x + delta})[0]
+            negative = evaluate.run(["lane_effort"], {"lane_input": x - delta})[0]
+            jacobian[:, lane] = ((positive - negative) / (2.0 * eps))[:, 0]
+
+        np.testing.assert_allclose(jacobian, coupling, rtol=0, atol=1e-6)
+        np.testing.assert_allclose(jacobian.sum(axis=0), [7.0, 10.0], rtol=0, atol=1e-6)
+        np.testing.assert_allclose(np.diag(jacobian), [2.0, 7.0], rtol=0, atol=1e-6)
+
     def test_gru_implicit_linearized(self):
         """The GRU enters the implicit solve as a per-step linearization."""
         device = self.device

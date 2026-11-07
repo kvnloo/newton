@@ -523,8 +523,11 @@ the ONNX backend):
 
 The neural drives enter the solve as a per-step linearization of the
 network. Its slopes come from a Warp autodiff pass over the loaded network, so
-only the ONNX backend supports them (see :ref:`neural-network-checkpoints`);
-with a Torch checkpoint
+only the ONNX backend supports them (see :ref:`neural-network-checkpoints`).
+For DriveNeuralGRU, the ONNX effort path must depend on the GRU and
+preserve per-actuator lane independence. Batch mixing and transformations
+whose lane behavior cannot be proved are rejected; otherwise summed-output
+gradients would not equal per-lane slopes. For a Torch checkpoint,
 :meth:`~newton.actuators.Actuator.set_effort_mode_implicit` raises
 ``NotImplementedError``. :class:`~newton.actuators.DriveNeuralMLP` also
 needs a single-step input history (``input_idx == [0]``).
