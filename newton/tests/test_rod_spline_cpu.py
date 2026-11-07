@@ -13,6 +13,51 @@ import newton
 
 
 class TestRodSplineCPU(unittest.TestCase):
+    def test_open_two_point_and_duplicate_controls_have_half_meter_chords(self):
+        """Verify two-point and repeated-endpoint controls yield four 0.5 m chords."""
+        start = wp.vec3(0.0, 0.0, 0.0)
+        end = wp.vec3(2.0, 0.0, 0.0)
+        expected = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.5, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.5, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        reference_points = None
+        reference_quaternions = None
+        for name, controls in (
+            ("two_points", (start, end)),
+            ("duplicate_start", (start, start, end)),
+            ("duplicate_end", (start, end, end)),
+        ):
+            with self.subTest(controls=name):
+                rod = newton.Rod.create_spline(controls, segment_count=4, radius=0.02)
+                self.assertFalse(rod.closed)
+                self.assertEqual((rod.point_count, rod.segment_count), (5, 4))
+                np.testing.assert_array_equal(
+                    rod.edges, [[0, 1], [1, 2], [2, 3], [3, 4]]
+                )
+                np.testing.assert_array_equal(rod.points[[0, -1]], expected[[0, -1]])
+                np.testing.assert_allclose(rod.points, expected, rtol=0.0, atol=5.0e-3)
+                np.testing.assert_allclose(
+                    np.linalg.norm(np.diff(rod.points, axis=0), axis=1),
+                    [0.5, 0.5, 0.5, 0.5],
+                    rtol=0.0,
+                    atol=5.0e-3,
+                )
+                self.assertEqual(rod.quaternions.shape, (4, 4))
+                self.assertTrue(np.isfinite(rod.quaternions).all())
+                if reference_points is None:
+                    reference_points = rod.points.copy()
+                    reference_quaternions = rod.quaternions.copy()
+                else:
+                    np.testing.assert_array_equal(rod.points, reference_points)
+                    np.testing.assert_array_equal(rod.quaternions, reference_quaternions)
+
     def test_curved_duplicate_control_assembles_with_straight_rest(self):
         """Verify a curved duplicate-control spline assembles as a Rod."""
         controls = [
