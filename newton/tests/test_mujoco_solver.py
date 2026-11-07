@@ -3108,6 +3108,57 @@ class TestMuJoCoSolverKinematicBodyProperties(unittest.TestCase):
         self.assertEqual(categories, {NewtonWarning})
 
 
+class TestImportedMocapNotificationReviewCPU(unittest.TestCase):
+    def test_native_cpu_mocap_pose_tracks_two_joint_notifications(self):
+        """Propagate consecutive root-anchor edits to native CPU mocap data."""
+        xml = """
+        <mujoco model="mocap_cpu_review">
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <body name="target" mocap="true">
+              <geom type="sphere" size="0.05" contype="0" conaffinity="0"/>
+            </body>
+            <body name="payload">
+              <freejoint/>
+              <geom type="sphere" size="0.05" contype="0" conaffinity="0"/>
+            </body>
+          </worldbody>
+          <equality><weld body1="target" body2="payload"
+                          relpose="0 0 0 1 0 0 0"/></equality>
+        </mujoco>
+        """
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        builder.add_mjcf(
+            xml, collapse_fixed_joints=True, convert_mjc_equality_constraints=False
+        )
+        model = builder.finalize(device="cpu")
+        target = model.body_label.index("mocap_cpu_review/worldbody/target")
+        self.assertEqual(int(model.body_flags.numpy()[target]), int(BodyFlags.KINEMATIC))
+        target_joint = int(np.where(model.joint_child.numpy() == target)[0][0])
+        solver = SolverMuJoCo(model, use_mujoco_cpu=True, disable_contacts=True)
+        mocap_map = solver.mjc_mocap_to_newton_jnt.numpy()
+        mocap_id = int(np.where(mocap_map[0] == target_joint)[0][0])
+        original_quat = solver.mj_data.mocap_quat[mocap_id].copy()
+        for xyz in ((0.1, 0.0, 0.0), (0.2, -0.1, 0.3)):
+            with self.subTest(xyz=xyz):
+                anchors = model.joint_X_p.numpy()
+                anchors[target_joint, :3] = xyz
+                model.joint_X_p.assign(anchors)
+                solver.notify_model_changed(ModelFlags.JOINT_PROPERTIES)
+                np.testing.assert_allclose(
+                    solver.mjw_data.mocap_pos.numpy()[0, mocap_id],
+                    xyz, rtol=0, atol=1.0e-6
+                )
+                np.testing.assert_allclose(
+                    solver.mj_data.mocap_pos[mocap_id],
+                    xyz, rtol=0, atol=1.0e-6
+                )
+                np.testing.assert_allclose(
+                    solver.mj_data.mocap_quat[mocap_id],
+                    original_quat, rtol=0, atol=1.0e-6
+                )
+
+
 class TestMuJoCoSolverCollisionMasks(unittest.TestCase):
     def test_large_graph_skips_before_pair_enumeration(self):
         """Skip large mask graphs before enumerating every shape pair."""
