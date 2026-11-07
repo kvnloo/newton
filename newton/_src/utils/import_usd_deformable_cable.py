@@ -12,16 +12,25 @@ curves. Driven by :func:`.import_usd.parse_usd` via a
 
 from __future__ import annotations
 
+import logging
 import math
 import warnings
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from functools import partial
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import warp as wp
 
+from ..exceptions import NewtonDeprecationWarning, NewtonWarning
 from ..sim.rod import _CIRCULAR_SECTION_TRANSVERSE_SHEAR_CORRECTION, Rod
+from ..usd import utils as usd
+from ..usd._resolution_policy import _resolve_shape_contact
+from ..usd.schema_resolver import PrimType
 
 if TYPE_CHECKING:
+    from pxr import Usd
+
     from ..sim.builder import ModelBuilder
 
 from .import_usd_deformable_utils import (
@@ -29,6 +38,7 @@ from .import_usd_deformable_utils import (
     _AOUSD_DEFAULT_THICKNESS,
     _AOUSD_DEFAULT_YOUNGS_MODULUS,
     _apply_cable_masses,
+    _attachment_vec3_list,
     _bake_world_points,
     _cable_segment_quaternions,
     _CableMassRun,
@@ -38,6 +48,7 @@ from .import_usd_deformable_utils import (
     _DeformableImportContext,
     _is_ignored_path,
     _read_deformable_element_array,
+    _resolve_attachment_target,
     _resolve_deformable_density,
     _set_cable_body_radius,
     _skip_for_deformable_body_owner,
@@ -47,8 +58,27 @@ from .import_usd_deformable_utils import (
     _warn_dropped_velocities,
     _warn_geometry_authored_material_attrs,
     _warn_subset_material_bindings,
-    _warn_unsupported_rest_fields,
 )
+from .import_usd_deformable_visual import _record_cable_visual_bind_poses
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_cable_contact(ctx: _DeformableImportContext, prim: Usd.Prim) -> dict[str, float]:
+    """Resolve capsule contact properties through the rigid collider material policy."""
+    material_prim = usd._find_physics_material_prim(prim)
+    material_path = str(material_prim.GetPath()) if material_prim is not None else ""
+    material = ctx.material_specs.get(material_path, ctx.material_specs[""])
+    return _resolve_shape_contact(prim, ctx.resolver, material, ctx.builder.default_shape_cfg, verbose=ctx.verbose)
+
+
+def _authored_cable_self_collision(ctx: _DeformableImportContext, prim: Usd.Prim) -> bool | None:
+    """Return the cable's authored self-collision flag, or ``None`` to use the import default."""
+    value, resolver = ctx.resolver.get_value_with_resolver(
+        prim, prim_type=PrimType.ARTICULATION, key="self_collision_enabled", verbose=ctx.verbose
+    )
+    return None if resolver is None else bool(value)
+
 
 # Attributes introduced after the family-prefix rename; density is shared and intentionally omitted.
 _POST_RENAME_CURVE_MATERIAL_ATTRS = (
@@ -67,6 +97,77 @@ _LEGACY_CURVE_MATERIAL_ATTRS = (
     "bendStiffness",
     "twistStiffness",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _CableArticulationRoot:
+    attachment_path: str
+    cable_point: int
+    parent_body: int
+    parent_anchor: wp.vec3
+
+
+def _add_cable_articulation_root_joint(
+    builder,
+    articulation_root: _CableArticulationRoot,
+    joint_indices: list[int],
+    child: int,
+    child_xform: wp.transform,
+) -> int:
+    parent_anchor_xform = wp.transform(articulation_root.parent_anchor, wp.quat_identity())
+    joint = builder.add_joint_ball(
+        parent=articulation_root.parent_body,
+        child=child,
+        parent_xform=parent_anchor_xform,
+        child_xform=child_xform,
+        label=f"{articulation_root.attachment_path}_site0",
+        enabled=True,
+    )
+    parent_body_xform = (
+        wp.transform_identity()
+        if articulation_root.parent_body == -1
+        else builder.body_q[articulation_root.parent_body]
+    )
+    parent_anchor_world = parent_body_xform * parent_anchor_xform
+    child_anchor_world = builder.body_q[child] * child_xform
+    initial_rotation = wp.transform_get_rotation(wp.transform_inverse(parent_anchor_world) * child_anchor_world)
+    q_start = builder.joint_q_start[joint]
+    builder.joint_q[q_start : q_start + 4] = list(initial_rotation)
+    joint_indices.append(joint)
+    return joint
+
+
+def _read_cable_attachment_endpoint(prim, deformable_read, point_count: int, closed: bool) -> int | None:
+    """Return the attached endpoint when a hard attachment can root an open cable articulation."""
+    if closed:
+        return None
+    if str(deformable_read(prim, "type0") or "") != "point":
+        return None
+    if str(deformable_read(prim, "type1") or "") != "xform":
+        return None
+    point_indices = [int(index) for index in (deformable_read(prim, "indices0") or [])]
+    if len(point_indices) != 1 or point_indices[0] not in (0, point_count - 1):
+        return None
+    if deformable_read(prim, "indices1"):
+        return None
+    if len(_attachment_vec3_list(deformable_read(prim, "coords1"))) > 1:
+        return None
+
+    enabled = deformable_read(prim, "attachmentEnabled")
+    if enabled is not None and not bool(enabled):
+        return None
+    try:
+        stiffness = deformable_read(prim, "stiffness")
+        if stiffness is not None and float(stiffness) != math.inf:
+            return None
+        damping = deformable_read(prim, "damping")
+        if damping is not None and (not math.isfinite(float(damping)) or float(damping) < 0.0):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return point_indices[0]
+
+
 # Removed family-prefixed thickness first, then the earlier unprefixed compatibility name.
 _CABLE_THICKNESS_ATTRS = ("curvesThickness", "thickness")
 _NEWTON_CURVE_DAMPING_ATTRS = (
@@ -146,7 +247,9 @@ def _read_validated_curve_topology(curves, path: str, *, warn: bool = True):
     vertex_counts = curves.GetCurveVertexCountsAttr().Get()
     if not points or not vertex_counts:
         if warn:
-            warnings.warn(f"{path}: cable curve has no points / curveVertexCounts; skipping.", stacklevel=2)
+            warnings.warn(
+                f"{path}: cable curve has no points / curveVertexCounts; skipping.", NewtonWarning, stacklevel=2
+            )
         return None
     counts = [int(c) for c in vertex_counts]
     for i, count in enumerate(counts):
@@ -155,6 +258,7 @@ def _read_validated_curve_topology(curves, path: str, *, warn: bool = True):
                 warnings.warn(
                     f"{path}: curveVertexCounts[{i}] is {count}; counts must be non-negative; "
                     f"skipping malformed cable.",
+                    NewtonWarning,
                     stacklevel=2,
                 )
             return None
@@ -164,55 +268,141 @@ def _read_validated_curve_topology(curves, path: str, *, warn: bool = True):
             warnings.warn(
                 f"{path}: curveVertexCounts total {total} does not match points length {len(points)}; "
                 f"skipping malformed cable.",
+                NewtonWarning,
                 stacklevel=2,
             )
         return None
     return points, counts
 
 
-def _read_cable_rest_shape_points(prim, path: str, point_count: int, deformable_read):
-    """Read count-matched cable ``restShapePoints``."""
-    rest_shape_points = deformable_read(prim, "restShapePoints")
-    if rest_shape_points is None:
+def _validate_cable_point_array(values, path: str, name: str, point_count: int):
+    """Check numeric triples before splitting values among curves."""
+    if values is None:
         return None
-    if len(rest_shape_points) != point_count:
+    try:
+        valid = len(values) == point_count and all(len(value) == 3 for value in values)
+        if valid:
+            for value in values:
+                wp.vec3(*value)
+    except (TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
         warnings.warn(
-            f"{path}: restShapePoints length {len(rest_shape_points)} != points {point_count}; "
-            f"ignoring rest shape (rest length taken from the imported points).",
+            f"{path}: {name} must contain one 3D value per point ({point_count}); ignoring {name}.",
+            NewtonWarning,
             stacklevel=2,
         )
         return None
-    return rest_shape_points
+    return values
 
 
-def _cable_rest_segment_lengths(rest_points, world_mat, path: str, *, closed: bool) -> list[float] | None:
-    """World-space rest segment lengths, or ``None`` (with a warning) if any segment is invalid.
+def _read_cable_shape_arrays(curves, path: str, point_count: int, deformable_read):
+    """Read default-time normals and rest arrays, checking their per-point layout."""
+    from pxr import UsdGeom
 
-    Applies the full affine so lengths stay exact under reflection / shear (translation cancels in
-    the segment differences). Rejecting the whole curve, rather than the offending segment, keeps
-    an invalid rest shape from mixing rest and current lengths along one cable.
-    """
-    points = _bake_world_points(rest_points, world_mat)
-    if closed:
-        points = [*points, points[0]]
-    lengths = [float(wp.length(points[i + 1] - points[i])) for i in range(len(points) - 1)]
-    if not lengths or any(not math.isfinite(length) or length <= 1.0e-8 for length in lengths):
-        warnings.warn(
-            f"{path}: restShapePoints has a non-finite or zero-length segment; ignoring rest shape "
-            f"(rest length taken from the imported points).",
-            stacklevel=2,
-        )
-        return None
-    return lengths
-
-
-def _warn_cable_rest_shape_effect(path: str) -> None:
-    """Report the intentionally limited effect of a valid cable rest shape."""
-    warnings.warn(
-        f"{path}: restShapePoints does not establish the simulated rest state; it is used only for "
-        f"material-gain discretization when stiffness or damping is available.",
-        stacklevel=2,
+    prim = curves.GetPrim()
+    rest_points = _validate_cable_point_array(
+        deformable_read(prim, "restShapePoints"), path, "restShapePoints", point_count
     )
+    rest_normals = _validate_cable_point_array(deformable_read(prim, "restNormals"), path, "restNormals", point_count)
+    primvar = UsdGeom.PrimvarsAPI(prim).GetPrimvar("normals")
+    if primvar.HasValue():
+        normals = primvar.ComputeFlattened()
+        interpolation = primvar.GetInterpolation()
+    else:
+        normals = curves.GetNormalsAttr().Get()
+        interpolation = curves.GetNormalsInterpolation()
+    if normals is not None and interpolation not in (UsdGeom.Tokens.vertex, UsdGeom.Tokens.varying):
+        warnings.warn(
+            f"{path}: normals interpolation '{interpolation}' is not per-point (vertex/varying); ignoring normals.",
+            NewtonWarning,
+            stacklevel=2,
+        )
+        normals = None
+    normals = _validate_cable_point_array(normals, path, "normals", point_count)
+    return normals, rest_points, rest_normals
+
+
+def _cable_frames_from_normals(positions, normals, world_mat, path: str, name: str, *, reject_curve: bool = True):
+    """Build frames, preserving per-segment initial fallbacks or rejecting bad rest directors."""
+    if normals is None:
+        return None
+    # Material directors follow the linear map, not the surface-normal inverse transpose.
+    transformed = [wp.transform_vector(world_mat, wp.vec3(*normal)) for normal in normals[: len(positions) - 1]]
+    for i, normal in enumerate(transformed):
+        tangent = wp.normalize(positions[i + 1] - positions[i])
+        perpendicular = normal - wp.dot(normal, tangent) * tangent
+        normal_length = float(wp.length(normal))
+        perpendicular_length = float(wp.length(perpendicular))
+        if (
+            not math.isfinite(normal_length)
+            or not math.isfinite(perpendicular_length)
+            or perpendicular_length <= 1.0e-8
+        ):
+            if reject_curve:
+                warnings.warn(
+                    f"{path}: {name} cannot define a rest frame at segment {i} "
+                    "(non-finite, zero, or tangent-parallel normal); using fallback frames for this curve.",
+                    NewtonWarning,
+                    stacklevel=2,
+                )
+                return None
+            # Initial normals historically fall back per segment. Keep all other authored frames.
+            transformed[i] = wp.vec3(0.0)
+    return _cable_segment_quaternions(positions, transformed)
+
+
+def _cable_rest_geometry(positions, rest_points, normals, rest_normals, world_mat, path: str, *, closed: bool):
+    """Resolve optional rest data; None reuses the initial geometry or native frame transport."""
+    rest_positions = rest_lengths = None
+    if rest_points is not None:
+        candidate = _bake_world_points(rest_points, world_mat)
+        if closed:
+            candidate = [*candidate, candidate[0]]
+        lengths = [float(wp.length(b - a)) for a, b in pairwise(candidate)]
+        if any(not math.isfinite(length) or length <= 1.0e-8 for length in lengths):
+            warnings.warn(
+                f"{path}: restShapePoints has a non-finite or zero-length segment; "
+                "ignoring rest shape and using the initial points.",
+                NewtonWarning,
+                stacklevel=2,
+            )
+        else:
+            rest_positions = candidate
+            rest_lengths = lengths
+    if rest_positions is None and rest_normals is None:
+        return None, None, None
+    frame_positions = positions if rest_positions is None else rest_positions
+    rest_frames = _cable_frames_from_normals(frame_positions, rest_normals, world_mat, path, "restNormals")
+    if rest_frames is None:
+        # USD falls back to the initial normal values, interpreted against the rest tangents.
+        rest_frames = _cable_frames_from_normals(frame_positions, normals, world_mat, path, "normals")
+    return rest_positions, rest_frames, rest_lengths
+
+
+def _join_cable_rest_points(
+    node_count: int, edges: list[tuple[int, int]], rest_vectors: list[wp.vec3]
+) -> list[wp.vec3]:
+    """Join rest edge vectors in a connected, acyclic cable graph.
+
+    Source curves can have separate rest origins. Starting from one shared origin
+    preserves their segment lengths and directions at welded nodes.
+    """
+    neighbors: list[list[tuple[int, wp.vec3]]] = [[] for _ in range(node_count)]
+    for (u, v), vector in zip(edges, rest_vectors, strict=True):
+        neighbors[u].append((v, vector))
+        neighbors[v].append((u, -vector))
+    positions = [wp.vec3(0.0) for _ in range(node_count)]
+    visited = {0}
+    pending = [0]
+    while pending:
+        u = pending.pop()
+        for v, vector in neighbors[u]:
+            if v not in visited:
+                positions[v] = positions[u] + vector
+                visited.add(v)
+                pending.append(v)
+    return positions
 
 
 def _warn_geometry_authored_newton_curve_damping_attrs(prim, path: str) -> None:
@@ -228,6 +418,7 @@ def _warn_geometry_authored_newton_curve_damping_attrs(prim, path: str) -> None:
             warnings.warn(
                 f"{path}: deformable material attribute 'newton:{name}' is authored on the geometry; "
                 "it belongs on the bound material (NewtonCurvesDeformableMaterialAPI) and is ignored.",
+                NewtonWarning,
                 stacklevel=2,
             )
 
@@ -251,7 +442,7 @@ def _warn_legacy_curve_material(path: str, material: dict[str, float] | None) ->
             f"{path}: physics:curvesThickness on the curve material was removed from the AOUSD "
             "proposal and is deprecated; move diameter d to physics:thicknesses = [d] on the "
             "simulation geometry and set physics:thicknesses:elementType = 'constant'.",
-            DeprecationWarning,
+            NewtonDeprecationWarning,
             stacklevel=2,
         )
     if material is not None and _has_legacy_curve_material(material):
@@ -261,7 +452,7 @@ def _warn_legacy_curve_material(path: str, material: dict[str, float] | None) ->
             f"geometry with physics:thicknesses:elementType, and convert "
             f"all four resolved legacy modes, including the stretch-to-shear and bend-to-twist "
             f"fallbacks, to structural values before authoring physics:curves*Stiffness.",
-            DeprecationWarning,
+            NewtonDeprecationWarning,
             stacklevel=2,
         )
 
@@ -432,20 +623,47 @@ def _apply_local_rod_material_gains(
         )
 
 
-def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[str], set[str]]:
-    """Weld curve deformables joined by curve-to-curve ``PhysicsAttachment`` prims into
-    explicit-topology :class:`Rod` objects.
+def _read_cable_articulation_root(
+    ctx: _DeformableImportContext,
+    prim,
+    point_count: int,
+    closed: bool,
+    target_path: str,
+    parent_articulation_bodies: set[int],
+) -> _CableArticulationRoot | None:
+    """Return an attachment that can connect the cable articulation to its parent.
 
-    A hard (unauthored / infinite stiffness) ``point``->``point`` attachment whose
-    ``src0``/``src1`` are both imported curve deformables and whose sites are coincident is
-    topology, not a runtime constraint: the two referenced control points are the same junction
-    node. Curves transitively joined this way form one graph component, built with a single
-    ``ModelBuilder.add_rod(rod=...)`` call (one capsule body per segment, junction nodes shared). Compliant or
-    non-coincident curve-to-curve attachments are NOT welded; they warn here and are preserved
-    as unsupported in ``path_attachment_attrs`` by the attachment post-pass.
-    Returns the curve prim paths and the junction attachment prim paths consumed here so the
-    per-curve cable pass and the attachment post-pass skip them. Single curves and
-    curve-to-xform attachments are left to those passes.
+    The supported case is a hard attachment from a cable endpoint to the world or a
+    transform. A rigid-body target must belong to the articulation whose joints will immediately
+    precede the cable joints, because articulation joints occupy contiguous ranges.
+    """
+    deformable_read = ctx.deformable_read
+    cable_point = _read_cable_attachment_endpoint(prim, deformable_read, point_count, closed)
+    if cable_point is None:
+        return None
+    target_points = _attachment_vec3_list(deformable_read(prim, "coords1"))
+
+    target_point = target_points[0] if target_points else wp.vec3(0.0, 0.0, 0.0)
+    target = _resolve_attachment_target(ctx, target_path, target_point)
+    if target is None:
+        return None
+    parent_body, parent_anchor = target
+    if parent_body >= 0 and parent_body not in parent_articulation_bodies:
+        return None
+    return _CableArticulationRoot(str(prim.GetPath()), cable_point, parent_body, parent_anchor)
+
+
+def _deformable_prepare_cable_topology(
+    ctx: _DeformableImportContext,
+) -> tuple[set[str], set[str], dict[str, _CableArticulationRoot]]:
+    """Prepare cable connectivity that must be known before creating cable joints.
+
+    Hard attachments between coincident cable points become shared nodes in one rod graph. For an
+    open cable with one hard attachment at an endpoint, that attachment connects the cable
+    articulation to the world or a rigid body. Other attachments remain separate constraints.
+
+    Returns the cable paths built as shared rod graphs, the attachment paths represented by those
+    graphs, and the parent attachment for each remaining cable that can join an articulation.
 
     A welded graph uses the first curve's stiffness and damping material as representative
     (heterogeneous gains warn), while density and simulation-geometry thickness stay local to each
@@ -470,10 +688,11 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
     path_cable_segments = ctx.path_cable_segments
     path_cable_point_anchors = ctx.path_cable_point_anchors
 
-    consumed_curves: set[str] = set()
-    consumed_attachments: set[str] = set()
+    cables_in_shared_graphs: set[str] = set()
+    attachments_in_shared_graphs: set[str] = set()
+    cable_articulation_roots: dict[str, _CableArticulationRoot] = {}
     if not (root_prim and root_prim.IsValid()):
-        return consumed_curves, consumed_attachments
+        return cables_in_shared_graphs, attachments_in_shared_graphs, cable_articulation_roots
 
     # Collect single-curve curve deformables eligible for graph welding. Junctions reference a
     # whole BasisCurves prim (not an individual curve within it), so a multi-curve prim is left
@@ -481,6 +700,8 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
     curve_recs: dict[str, _CurveDeformableRecord] = {}
     for prim in ctx.prims.cables:
         path = str(prim.GetPath())
+        if path in path_cable_map:
+            continue
         if _is_ignored_path(path, ignore_paths):
             continue
         # Disabled/kinematic curves must not be welded into a graph; the per-curve pass warns.
@@ -502,6 +723,8 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
         wmat = get_prim_world_mat(prim, None, incoming_world_xform)
         # Apply the full world affine so non-uniform scale, shear, and reflections are exact.
         positions = _bake_world_points(pts, wmat)
+        if any(not math.isfinite(float(component)) for point in positions for component in point):
+            continue  # The per-curve pass warns and skips invalid source geometry.
         mat = usd._get_curve_deformable_material(prim, deformable_read)
         radius = _cable_radius_from_material(mat, linear_unit)
         closed = curves.GetWrapAttr().Get() == UsdGeom.Tokens.periodic
@@ -533,28 +756,53 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
         )
 
     if not curve_recs:
-        return consumed_curves, consumed_attachments
+        return cables_in_shared_graphs, attachments_in_shared_graphs, cable_articulation_roots
+
+    bodies_in_latest_articulation: set[int] = set()
+    if builder.articulation_count:
+        articulation = builder.articulation_count - 1
+        for joint in range(builder.articulation_start[articulation], builder.articulation_end[articulation]):
+            bodies_in_latest_articulation.add(builder.joint_child[joint])
+            if builder.joint_parent[joint] >= 0:
+                bodies_in_latest_articulation.add(builder.joint_parent[joint])
 
     # Union-find over curve prim paths; record the per-attachment welded point pairs.
     curve_sets = _UnionFind(curve_recs)
 
     welds: list[tuple[str, int, str, int]] = []
     weld_attachments: list[tuple[str, str]] = []  # (src0 curve path, attachment prim path)
+    attachments_per_cable: dict[str, int] = {}
+    articulation_root_candidates: dict[str, _CableArticulationRoot] = {}
     for prim in ctx.prims.attachments:
-        # An ignored junction must not alter topology; leave its curves to the per-curve pass.
-        if _is_ignored_path(str(prim.GetPath()), ignore_paths):
+        attachment_path = str(prim.GetPath())
+        if _is_ignored_path(attachment_path, ignore_paths):
             continue
         s0 = prim.GetRelationship("physics:src0").GetTargets()
         s1 = prim.GetRelationship("physics:src1").GetTargets()
-        if not s0 or not s1:
+        if not s0:
             continue
-        src0, src1 = str(s0[0]), str(s1[0])
+        src0 = str(s0[0])
+        src1 = str(s1[0]) if s1 else ""
+        enabled = deformable_read(prim, "attachmentEnabled")
+        if enabled is not None and not bool(enabled):
+            continue
+        if src0 in curve_recs:
+            attachments_per_cable[src0] = attachments_per_cable.get(src0, 0) + 1
+            articulation_root = _read_cable_articulation_root(
+                ctx,
+                prim,
+                len(curve_recs[src0].positions),
+                curve_recs[src0].closed,
+                src1,
+                bodies_in_latest_articulation,
+            )
+            if articulation_root is not None:
+                articulation_root_candidates[src0] = articulation_root
+        if src1 in curve_recs and src1 != src0:
+            attachments_per_cable[src1] = attachments_per_cable.get(src1, 0) + 1
         if src0 not in curve_recs or src1 not in curve_recs or src0 == src1:
             continue
         if str(deformable_read(prim, "type0") or "") != "point" or str(deformable_read(prim, "type1") or "") != "point":
-            continue
-        enabled = deformable_read(prim, "attachmentEnabled")
-        if enabled is not None and not bool(enabled):
             continue
         idx0 = [int(i) for i in (deformable_read(prim, "indices0") or [])]
         idx1 = [int(i) for i in (deformable_read(prim, "indices1") or [])]
@@ -588,6 +836,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             warnings.warn(
                 f"{prim.GetPath()}: curve-to-curve attachment does not author a hard "
                 f"(+inf stiffness) constraint; not welded.",
+                NewtonWarning,
                 stacklevel=2,
             )
             continue
@@ -602,6 +851,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             warnings.warn(
                 f"{prim.GetPath()}: curve-to-curve attachment sites are not coincident; not welded "
                 f"(welding would move the authored geometry).",
+                NewtonWarning,
                 stacklevel=2,
             )
             continue
@@ -611,7 +861,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
         # Consumed only after the component actually builds (below): a failed graph falls back
         # to the per-curve pass, and its junction must reach the attachment pass so the authored
         # constraint is preserved instead of silently dropped.
-        weld_attachments.append((src0, str(prim.GetPath())))
+        weld_attachments.append((src0, attachment_path))
 
     components: dict[str, list[str]] = {}
     for p in curve_recs:
@@ -660,6 +910,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
                         f"cable graph '{cid}': welding collapses segment {seg} of '{key}' (both "
                         f"endpoints merge into one node); skipping the weld so its curves import "
                         f"individually.",
+                        NewtonWarning,
                         stacklevel=2,
                     )
                     return False
@@ -683,6 +934,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             warnings.warn(
                 f"cable graph '{cid}': the welded component contains a cycle, which a rod graph "
                 f"cannot close; skipping the weld so its curves import individually.",
+                NewtonWarning,
                 stacklevel=2,
             )
             return False
@@ -691,54 +943,60 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
         # duplicate or collapsed points. Reject the component with a warning instead, leaving its curves
         # to the per-curve pass (which warns and skips any individually-degenerate curve).
         edge_lengths = [float(wp.length(node_positions[v] - node_positions[u])) for u, v in edges]
-        if min(edge_lengths, default=0.0) <= 1.0e-8:
+        if any(not math.isfinite(length) or length <= 1.0e-8 for length in edge_lengths):
             warnings.warn(
-                f"cable graph '{cid}': a welded curve has a zero-length segment (duplicate or collapsed "
+                f"cable graph '{cid}': a welded curve has a non-finite or zero-length segment (duplicate or collapsed "
                 f"points); skipping the welded component so its curves import individually.",
+                NewtonWarning,
                 stacklevel=2,
             )
             return False
 
-        # Rest lengths drive material-gain discretization; edge_lengths stays current for the anchor map below.
-        material_edge_lengths = edge_lengths.copy()
-        rest_lengths_by_curve: dict[str, list[float]] = {}
+        frames_by_curve = {}
+        rest_vectors = []
+        material_edge_lengths = []
+        has_rest_points = False
         for key in comp_paths:
             rec = curve_recs[key]
-            rest_shape_points = _read_cable_rest_shape_points(rec.prim, key, len(rec.positions), deformable_read)
-            if rest_shape_points is None:
-                continue
+            count = len(rec.positions)
+            curves = UsdGeom.BasisCurves(rec.prim)
+            normals, rest_points, rest_normals = _read_cable_shape_arrays(curves, key, count, deformable_read)
             wmat = get_prim_world_mat(rec.prim, None, incoming_world_xform)
-            rest_lengths = _cable_rest_segment_lengths(rest_shape_points, wmat, key, closed=rec.closed)
-            if rest_lengths is not None:
-                rest_lengths_by_curve[key] = rest_lengths
-        for edge_index, (key, segment_index) in enumerate(edge_owner):
-            if key in rest_lengths_by_curve:
-                material_edge_lengths[edge_index] = rest_lengths_by_curve[key][segment_index]
+            # Near-coincident welds can move endpoints; frames must follow the merged tangents.
+            merged_positions = [node_positions[global_node((key, point))] for point in range(count)]
+            initial_frames = _cable_frames_from_normals(
+                merged_positions, normals, wmat, key, "normals", reject_curve=False
+            )
+            rest_positions, rest_frames, rest_lengths = _cable_rest_geometry(
+                merged_positions, rest_points, normals, rest_normals, wmat, key, closed=False
+            )
+            frames_by_curve[key] = (initial_frames, rest_frames)
+            edge_start = len(material_edge_lengths)
+            material_edge_lengths.extend(
+                edge_lengths[edge_start : edge_start + count - 1] if rest_lengths is None else rest_lengths
+            )
+            has_rest_points |= rest_positions is not None
+            if rest_positions is None:
+                rest_positions = merged_positions
+            rest_vectors.extend(b - a for a, b in pairwise(rest_positions))
 
-        # Rod graph construction auto-orients segments, so authored cross-section frames cannot be honored.
-        for key in comp_paths:
-            kprim = curve_recs[key].prim
-            normals_attr = UsdGeom.BasisCurves(kprim).GetNormalsAttr()
-            if UsdGeom.PrimvarsAPI(kprim).GetPrimvar("normals").HasValue() or (
-                normals_attr and normals_attr.Get() is not None
-            ):
-                warnings.warn(
-                    f"{key}: per-point normals are dropped for a welded cable graph; its Rod segments use "
-                    "auto-oriented frames instead of the authored cross-section frame.",
-                    stacklevel=2,
-                )
+        rest_node_positions = (
+            _join_cable_rest_points(len(node_positions), edges, rest_vectors) if has_rest_points else None
+        )
 
         rep = curve_recs[comp_paths[0]]
+        contact_properties = {p: _resolve_cable_contact(ctx, curve_recs[p].prim) for p in comp_paths}
         for key in comp_paths:
             rec = curve_recs[key]
             _warn_geometry_authored_material_attrs(rec.prim, key, "PhysicsCurvesDeformableMaterialAPI", deformable_read)
             _warn_geometry_authored_newton_curve_damping_attrs(rec.prim, key)
             _warn_legacy_curve_material(key, rec.material)
-        # A welded graph necessarily flattens stiffness and damping to one representative
+        # A welded graph flattens stiffness, damping, and contact properties to one representative
         # material. Density and geometry thickness remain per segment.
         if len(comp_paths) > 1:
             sigs = {
                 (
+                    frozenset(contact_properties[p].items()),
                     curve_recs[p].material is not None,
                     frozenset(
                         (name, value) for name, value in (curve_recs[p].material or {}).items() if name != "density"
@@ -748,9 +1006,10 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             }
             if len(sigs) > 1:
                 warnings.warn(
-                    f"cable graph '{cid}': welded curves have differing stiffness/damping; using "
-                    f"'{comp_paths[0]}' as the representative material gains for the whole component. "
+                    f"cable graph '{cid}': welded curves have differing stiffness/damping/contact properties; using "
+                    f"'{comp_paths[0]}' as the representative material for the whole component. "
                     "Density remains local to each curve.",
+                    NewtonWarning,
                     stacklevel=2,
                 )
         radius = rep.segment_radii[0]
@@ -765,6 +1024,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             warnings.warn(
                 f"cable graph '{cid}': welded cables mix collision-enabled and collision-disabled "
                 f"curves; the whole graph collides.",
+                NewtonWarning,
                 stacklevel=2,
             )
         # A zero representative density still needs geometric weights when any member
@@ -776,22 +1036,57 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             graph_weight_density = 1.0
         cfg = replace(
             builder.default_shape_cfg,
+            **contact_properties[comp_paths[0]],
             density=graph_weight_density,
             has_shape_collision=collision_enabled,
             has_particle_collision=collision_enabled,
         )
-        # Unlike single cables, the graph junction spanning tree is intrinsic topology, not a
-        # caller choice, and only a tree (not the all-incident-edges joint set produced when
-        # unwrapped) is articulation-safe. So the importer wraps each component into its own
-        # articulation here; path_cable_map exposes empty joints for graph curves accordingly.
-        rod = Rod(node_positions, edges=edges, radius=radius)
+        # Record the whole graph through the native path; source-curve lookup stays
+        # in the per-prim import maps below.
+        rod = Rod(node_positions, edges=edges, radius=radius, rest_points=rest_node_positions)
+        rest_quaternions = [] if any(rest_frames is not None for _, rest_frames in frames_by_curve.values()) else None
+        for edge_index, ((u, v), (key, segment)) in enumerate(zip(edges, edge_owner, strict=True)):
+            frames, rest_frames = frames_by_curve[key]
+            if frames is not None:
+                rod.quaternions[edge_index] = list(frames[segment])
+            if rest_quaternions is None:
+                continue
+            if rest_frames is not None:
+                rest_quaternions.append(rest_frames[segment])
+            else:
+                rest_quaternions.append(
+                    builder._transport_rod_frame(
+                        "USD cable graph",
+                        f"{key}: segment {segment}",
+                        rod.quaternions[edge_index],
+                        wp.normalize(node_positions[v] - node_positions[u]),
+                        wp.normalize(rest_vectors[edge_index]),
+                    )
+                )
+        rod.rest_quaternions = rest_quaternions
         body_ids, graph_joint_ids = builder.add_rod(
             rod=rod,
             cfg=cfg,
             label=cid,
             wrap_in_articulation=True,
-            body_frame_origin="com",
         )
+        point_sources = [[] for _ in node_positions]
+        for key in comp_paths:
+            for point in range(len(curve_recs[key].positions)):
+                point_sources[global_node((key, point))].append((key, point))
+        _record_cable_visual_bind_poses(ctx, rod, body_ids, point_sources)
+        # Any member disabling self-collision disables it for the shared articulation.
+        authored_self_collisions = {
+            value for p in comp_paths if (value := _authored_cable_self_collision(ctx, curve_recs[p].prim)) is not None
+        }
+        if len(authored_self_collisions) > 1:
+            logger.warning(
+                "cable graph '%s': welded curves author differing self-collision settings; "
+                "self-collision is disabled for the whole graph.",
+                cid,
+            )
+        if authored_self_collisions:
+            ctx.articulation_has_self_collision[builder.articulation_count - 1] = all(authored_self_collisions)
         edge_radii = [curve_recs[key].segment_radii[segment] for key, segment in edge_owner]
         body_radii = dict(zip(body_ids, edge_radii, strict=True))
         for body, edge_radius in zip(body_ids, edge_radii, strict=True):
@@ -816,15 +1111,13 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
             graph_joint_radii,
             linear_unit,
         )
-        for key in rest_lengths_by_curve:
-            _warn_cable_rest_shape_effect(key)
 
         # Partition graph bodies back to their owning curve, and rebuild the per-prim anchor
         # maps the curve-to-xform attachment pass reads (point index / segment index -> body).
         per_prim_segments: dict[str, dict[int, tuple[int, float]]] = {}
         per_prim_bodies: dict[str, list[int]] = {}
         for ge, (key, seg) in enumerate(edge_owner):
-            length = edge_lengths[ge]
+            length = material_edge_lengths[ge]
             per_prim_segments.setdefault(key, {})[seg] = (body_ids[ge], length)
             per_prim_bodies.setdefault(key, []).append(body_ids[ge])
 
@@ -849,8 +1142,7 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
                         anchors.setdefault(pi, []).append((body, wp.vec3(0.0, 0.0, z)))
             path_cable_point_anchors[key] = anchors
             path_cable_segments[key] = segs
-            # Graph cables are returned pre-wrapped (see the add_rod call above), so joints are
-            # empty: callers using the "if joints: add_articulation(joints)" pattern skip them.
+            # The articulation belongs to the complete graph, not to any one source curve.
             path_cable_map[key] = (per_prim_bodies.get(key, []), [])
             path_cable_attrs[key] = {
                 "material": dict(rec.material or {}),
@@ -859,13 +1151,6 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
                 "graph_component": cid,
             }
             key_bodies = per_prim_bodies.get(key, [])
-            if key_bodies:
-                # Edges are assembled curve-by-curve, so each curve's graph bodies are contiguous.
-                # A welded curve owns no individual tree joints (they live in the shared graph
-                # articulation, found via articulation_label), so its joint range is empty.
-                builder._record_cable_group(
-                    key, (key_bodies[0], key_bodies[-1] + 1), (builder.joint_count, builder.joint_count)
-                )
             segment_count = n if rec.closed else n - 1
             run = _CableMassRun(
                 curve_index=0,
@@ -901,9 +1186,9 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
                         "element_type": authored_masses.element_type,
                         "legacy_implicit_type": authored_masses.legacy_implicit_type,
                     }
-            consumed_curves.add(key)
+            cables_in_shared_graphs.add(key)
         if verbose:
-            print(f"Added cable graph {cid} with {len(body_ids)} segments across {len(comp_paths)} curves.")
+            logger.info("Added cable graph %s with %s segments across %s curves.", cid, len(body_ids), len(comp_paths))
         return True
 
     for cid, comp_curves in components.items():
@@ -912,17 +1197,28 @@ def _deformable_import_cable_graphs(ctx: _DeformableImportContext) -> tuple[set[
         if len(comp_paths) == 1 and not comp_welds:
             continue  # plain single curve: leave it to the per-curve pass
         if _build_graph_component(cid, comp_paths, comp_welds):
-            consumed_attachments.update(attachments_by_comp.get(cid, ()))
+            attachments_in_shared_graphs.update(attachments_by_comp.get(cid, ()))
 
-    return consumed_curves, consumed_attachments
+    cable_articulation_roots = {
+        path: articulation_root
+        for path, articulation_root in articulation_root_candidates.items()
+        if attachments_per_cable.get(path) == 1 and path not in cables_in_shared_graphs
+    }
+    return cables_in_shared_graphs, attachments_in_shared_graphs, cable_articulation_roots
 
 
-def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve_paths: set[str]) -> None:
+def _deformable_import_cable(
+    ctx: _DeformableImportContext,
+    cables_in_shared_graphs: set[str],
+    cable_articulation_roots: dict[str, _CableArticulationRoot],
+    cable_prims: list | None = None,
+) -> None:
     """Import single-curve cable deformables (linear ``GeomBasisCurves`` -> rod via ``add_rod``).
 
-    Curves already welded into a rod graph (``consumed_cable_curve_paths``) are skipped. Each cable is
-    wrapped into its own articulation so the model is finalize-ready. Results land in
-    ``path_cable_map`` / attrs / segments / point anchors.
+    Curves already built as a rod graph are skipped. Each remaining cable is placed in an
+    articulation. A physical attachment at either endpoint provides the root joint when
+    possible; otherwise the cable receives a free joint to the world. ``cable_prims`` limits
+    the pass when attached cables must be created directly after their rigid articulation.
     """
     from pxr import UsdGeom
 
@@ -940,18 +1236,33 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
     path_cable_attrs = ctx.path_cable_attrs
     path_cable_segments = ctx.path_cable_segments
     path_cable_point_anchors = ctx.path_cable_point_anchors
+    path_attachment_map = ctx.path_attachment_map
 
     if not (root_prim and root_prim.IsValid()):
         return
-    for prim in ctx.prims.cables:
+
+    def cable_import_priority(prim) -> int:
+        articulation_root = cable_articulation_roots.get(str(prim.GetPath()))
+        if articulation_root is None:
+            return 2
+        if articulation_root.parent_body >= 0:
+            return 0
+        return 1
+
+    # A rigid-target cable extends the current articulation. Create it before a world-target cable
+    # starts a new articulation.
+    cable_prims = sorted(ctx.prims.cables if cable_prims is None else cable_prims, key=cable_import_priority)
+    for prim in cable_prims:
         path = str(prim.GetPath())
-        if path in consumed_cable_curve_paths:
+        if path in path_cable_map:
+            continue
+        if path in cables_in_shared_graphs:
             continue  # already built as part of a welded rod graph
         if _is_ignored_path(path, ignore_paths):
             continue
         skip_reason = _deformable_body_skip_reason(prim, deformable_read)
         if skip_reason is not None:
-            warnings.warn(f"{path}: {skip_reason}; skipping cable import.", stacklevel=2)
+            warnings.warn(f"{path}: {skip_reason}; skipping cable import.", NewtonWarning, stacklevel=2)
             continue
         if _skip_for_deformable_body_owner(ctx, prim, path):
             continue
@@ -963,6 +1274,7 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
         if curves.GetTypeAttr().Get() != UsdGeom.Tokens.linear:
             warnings.warn(
                 f"{path}: only linear BasisCurves import as cables; skipping non-linear curve.",
+                NewtonWarning,
                 stacklevel=2,
             )
             continue
@@ -971,52 +1283,13 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
             continue
         points, vertex_counts = topo
         closed = curves.GetWrapAttr().Get() == UsdGeom.Tokens.periodic
-        # Rest centerline used for the rest length below (one point per vertex); restNormals
-        # and rest bend angles are not imported yet.
-        rest_shape_points = _read_cable_rest_shape_points(prim, path, len(points), deformable_read)
-        _warn_unsupported_rest_fields(prim, path, ("restNormals",), deformable_read)
+        normals, rest_shape_points, rest_normals = _read_cable_shape_arrays(curves, path, len(points), deformable_read)
         _warn_dropped_velocities(prim, path)
         _warn_geometry_authored_material_attrs(prim, path, "PhysicsCurvesDeformableMaterialAPI", deformable_read)
         _warn_geometry_authored_newton_curve_damping_attrs(prim, path)
         _warn_subset_material_bindings(prim, path)
 
         world_mat = get_prim_world_mat(prim, None, incoming_world_xform)
-        # Centerline and rest points use the full affine (below) so reflections / shears are exact.
-        # The curve normal is a material-frame director, not a surface normal: it co-deforms with
-        # the segment tangent, so it transforms by the full linear block M like the points, not by
-        # the covector rule M^-T. Recover the linear block from basis images (its columns).
-        _o = wp.transform_point(world_mat, wp.vec3(0.0, 0.0, 0.0))
-        _cx = wp.transform_point(world_mat, wp.vec3(1.0, 0.0, 0.0)) - _o
-        _cy = wp.transform_point(world_mat, wp.vec3(0.0, 1.0, 0.0)) - _o
-        _cz = wp.transform_point(world_mat, wp.vec3(0.0, 0.0, 1.0)) - _o
-        normal_linear = wp.mat33(_cx[0], _cy[0], _cz[0], _cx[1], _cy[1], _cz[1], _cx[2], _cy[2], _cz[2])
-
-        # Per-point normals give each segment's cross-section frame (twist).
-        # ``primvars:normals`` takes precedence over the schema ``normals`` attribute and
-        # may be indexed (flattened here); either way the normals are honored only when
-        # authored per point: interpolation must be vertex/varying (one normal per control
-        # point) and the count must match the points.
-        normals_primvar = UsdGeom.PrimvarsAPI(prim).GetPrimvar("normals")
-        if normals_primvar.HasValue():
-            normals = normals_primvar.ComputeFlattened()
-            normals_interp = normals_primvar.GetInterpolation()
-        else:
-            normals = curves.GetNormalsAttr().Get()
-            normals_interp = curves.GetNormalsInterpolation()
-        if normals is not None and normals_interp not in (UsdGeom.Tokens.vertex, UsdGeom.Tokens.varying):
-            warnings.warn(
-                f"{path}: normals interpolation '{normals_interp}' is not per-point (vertex/varying); "
-                f"ignoring normals.",
-                stacklevel=2,
-            )
-            normals = None
-        if normals is not None and len(normals) != len(points):
-            warnings.warn(
-                f"{path}: normals length {len(normals)} != points {len(points)}; ignoring normals.",
-                stacklevel=2,
-            )
-            normals = None
-
         # The current proposal authors structural stiffnesses (EA, kGA, EI, GJ); missing modes
         # derive from E, nu, and the physical curve thickness. Newton damping stays independently
         # optional per mode. Each resolved gain is divided by the joint-local dual rest length
@@ -1055,11 +1328,14 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
         _warn_collision_approximated(path, approximated_from)
         cable_cfg = replace(
             builder.default_shape_cfg,
+            **_resolve_cable_contact(ctx, prim),
             density=resolved_cable_density,
             has_shape_collision=collision_enabled,
             has_particle_collision=collision_enabled,
         )
+        self_collision = _authored_cable_self_collision(ctx, prim)
 
+        cable_joint_start = builder.joint_count
         cable_bodies: list[int] = []
         cable_joints: list[int] = []
         # vertex index -> [(segment body, body-local point)]
@@ -1067,7 +1343,6 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
         # flat segment index -> (segment body, segment length)
         cable_segments: dict[int, tuple[int, float]] = {}
         cable_mass_runs: list[_CableMassRun] = []
-        has_valid_rest_shape = False
         offset = 0
         flat_segment_index = 0
         for ci, vertex_count in enumerate(vertex_counts):
@@ -1082,6 +1357,7 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
             if n < min_points:
                 warnings.warn(
                     f"{path}: curve {ci} has {n} points (need >= {min_points}); skipping that curve.",
+                    NewtonWarning,
                     stacklevel=2,
                 )
                 flat_segment_index += curve_segment_count
@@ -1096,56 +1372,97 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
             # A zero-length segment (duplicate consecutive points) can't be oriented or
             # sized; warn and skip just this curve rather than aborting the whole import.
             seg_lengths = [float(wp.length(positions[i + 1] - positions[i])) for i in range(num_seg)]
-            if min(seg_lengths, default=0.0) <= 1.0e-8:
+            if any(not math.isfinite(length) or length <= 1.0e-8 for length in seg_lengths):
                 warnings.warn(
-                    f"{path}: curve {ci} has duplicate consecutive points (zero-length segment); skipping that curve.",
+                    f"{path}: curve {ci} has non-finite points or duplicate consecutive points (zero-length segment); skipping that curve.",
+                    NewtonWarning,
                     stacklevel=2,
                 )
                 flat_segment_index += curve_segment_count
                 continue
-            # Authored normals set each segment's cross-section twist; map them to world via
-            # the full linear block computed above. A singular block can only degenerate a
-            # normal to (near-)zero, which ``_cable_segment_quaternions`` already falls back
-            # from (roll-free frame), so no special-casing here.
-            quaternions = None
-            if normals is not None:
-                seg_normals = [
-                    wp.mul(normal_linear, wp.vec3(float(nv[0]), float(nv[1]), float(nv[2])))
-                    for nv in normals[start : start + n]
-                ]
-                quaternions = _cable_segment_quaternions(positions, seg_normals)
-            # Use the rest centerline when authored (else the imported points), so each joint's dual
-            # length follows the authored rest geometry.
-            material_seg_lengths = seg_lengths
-            rest_seg_lengths = None
-            if rest_shape_points is not None:
-                rest_seg_lengths = _cable_rest_segment_lengths(
-                    rest_shape_points[start : start + n], world_mat, path, closed=closed
-                )
-                if rest_seg_lengths is not None:
-                    material_seg_lengths = rest_seg_lengths
+            curve_path = path if len(vertex_counts) == 1 else f"{path}: curve {ci}"
+            curve_normals = None if normals is None else normals[start : start + n]
+            quaternions = _cable_frames_from_normals(
+                positions, curve_normals, world_mat, curve_path, "normals", reject_curve=False
+            )
+            rest_positions, rest_quaternions, material_seg_lengths = _cable_rest_geometry(
+                positions,
+                None if rest_shape_points is None else rest_shape_points[start : start + n],
+                curve_normals,
+                None if rest_normals is None else rest_normals[start : start + n],
+                world_mat,
+                curve_path,
+                closed=closed,
+            )
+            if material_seg_lengths is None:
+                material_seg_lengths = seg_lengths
             label = path if len(vertex_counts) == 1 else f"{path}_curve{ci}"
             curve_radii = segment_radii[flat_segment_index : flat_segment_index + num_seg]
-            # Wrap each cable into its own articulation so the model is finalize-ready (add_rod keeps
-            # a periodic cable's loop-closing joint out of the tree). Attachment joints to other
-            # bodies are loop-closing and stay outside the articulation regardless.
+            curve_point_radii = point_radii[start : start + n]
+            curve_joint_radii = [*curve_point_radii[1:], curve_point_radii[0]] if closed else curve_point_radii[1:-1]
+            articulation_root = cable_articulation_roots.get(path) if len(vertex_counts) == 1 and not closed else None
+            if articulation_root is not None and articulation_root.cable_point == n - 1:
+                curve_joint_radii.reverse()
             rod = Rod(
                 positions,
                 quaternions=quaternions,
+                rest_points=rest_positions,
+                rest_quaternions=rest_quaternions,
                 radius=curve_radii[0],
                 closed=closed,
             )
-            bodies, joints = builder.add_rod(
-                rod=rod,
-                cfg=cable_cfg,
-                label=label,
-                wrap_in_articulation=True,
-                body_frame_origin="com",
-            )
+            if articulation_root is None:
+                # One deformable object per USD prim is recorded below; a multi-curve prim spans
+                # several add_rod calls, so per-call recording would split it.
+                with builder._suppress_curve_object_recording():
+                    bodies, joints = builder.add_rod(
+                        rod=rod,
+                        cfg=cable_cfg,
+                        label=label,
+                        wrap_in_articulation=True,
+                    )
+            else:
+                articulation_root_joints: list[int] = []
+
+                bodies, joints = builder._add_rod_graph(
+                    node_positions=positions,
+                    rest_node_positions=rest_positions,
+                    rest_quaternions=rest_quaternions,
+                    edges=[(index, index + 1) for index in range(num_seg)],
+                    quaternions=quaternions,
+                    radius=curve_radii[0],
+                    cfg=cable_cfg,
+                    stretch_stiffness=None,
+                    stretch_damping=None,
+                    shear_stiffness=None,
+                    shear_damping=None,
+                    bend_stiffness=None,
+                    bend_damping=None,
+                    twist_stiffness=None,
+                    twist_damping=None,
+                    label=label,
+                    wrap_in_articulation=True,
+                    body_frame_origin="com",
+                    junction_collision_filter=True,
+                    color=None,
+                    articulation_root_node=articulation_root.cable_point,
+                    articulation_root_joint_factory=partial(
+                        _add_cable_articulation_root_joint,
+                        builder,
+                        articulation_root,
+                        articulation_root_joints,
+                    ),
+                )
+                path_attachment_map[articulation_root.attachment_path] = articulation_root_joints
+            point_sources = [[(path, start + i)] for i in range(n)]
+            if closed:
+                point_sources.append([(path, start)])
+            _record_cable_visual_bind_poses(ctx, rod, bodies, point_sources)
+            # A cable rooted on a rigid articulation keeps that articulation's flag instead.
+            if self_collision is not None and (articulation_root is None or articulation_root.parent_body == -1):
+                ctx.articulation_has_self_collision[builder.articulation_count - 1] = self_collision
             for body, segment_radius in zip(bodies, curve_radii, strict=True):
                 _set_cable_body_radius(builder, body, segment_radius)
-            curve_point_radii = point_radii[start : start + n]
-            curve_joint_radii = [*curve_point_radii[1:], curve_point_radii[0]] if closed else curve_point_radii[1:-1]
             _apply_local_rod_material_gains(
                 builder,
                 bodies,
@@ -1156,7 +1473,6 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
                 curve_joint_radii,
                 linear_unit,
             )
-            has_valid_rest_shape |= rest_seg_lengths is not None
             cable_bodies.extend(bodies)
             cable_joints.extend(joints)
             cable_mass_runs.append(
@@ -1168,7 +1484,7 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
                     body_ids=tuple(bodies),
                     element_volumes=tuple(
                         math.pi * segment_radius**2 * segment_length
-                        for segment_radius, segment_length in zip(curve_radii, seg_lengths, strict=True)
+                        for segment_radius, segment_length in zip(curve_radii, material_seg_lengths, strict=True)
                     ),
                     closed=closed,
                 )
@@ -1176,7 +1492,7 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
 
             for si, body in enumerate(bodies):
                 seg_index = flat_segment_index + si
-                cable_segments[seg_index] = (body, seg_lengths[si])
+                cable_segments[seg_index] = (body, material_seg_lengths[si])
 
             for pi in range(n):
                 point_index = start + pi
@@ -1190,14 +1506,12 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
                 else:
                     incident = (pi - 1, pi)
                 for si in incident:
-                    z = -0.5 * seg_lengths[si] if si == pi else 0.5 * seg_lengths[si]
+                    z = -0.5 * material_seg_lengths[si] if si == pi else 0.5 * material_seg_lengths[si]
                     anchors.append((bodies[si], wp.vec3(0.0, 0.0, z)))
 
             flat_segment_index += curve_segment_count
 
         if cable_bodies:
-            if has_valid_rest_shape:
-                _warn_cable_rest_shape_effect(path)
             authored_masses = _apply_cable_masses(
                 builder,
                 prim,
@@ -1209,12 +1523,11 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
                 resolved_cable_density,
             )
             path_cable_map[path] = (cable_bodies, cable_joints)
-            # Bodies/joints for a cable prim are built back-to-back, so the index lists are contiguous.
+            # Include generated roots, as native recording does. The returned rod-joint list
+            # excludes roots and can have gaps when the prim contains multiple curves.
             body_range = (cable_bodies[0], cable_bodies[-1] + 1)
-            joint_range = (
-                (cable_joints[0], cable_joints[-1] + 1) if cable_joints else (builder.joint_count, builder.joint_count)
-            )
-            builder._record_cable_group(path, body_range, joint_range)
+            joint_range = (cable_joint_start, builder.joint_count)
+            builder._record_curve_deformable_object(path, body_range, joint_range)
             path_cable_point_anchors[path] = cable_point_anchors
             path_cable_segments[path] = cable_segments
             path_cable_attrs[path] = {
@@ -1236,4 +1549,4 @@ def _deformable_import_cable(ctx: _DeformableImportContext, consumed_cable_curve
                         "legacy_implicit_type": authored_masses.legacy_implicit_type,
                     }
             if verbose:
-                print(f"Added cable {path} with {len(cable_bodies)} segments.")
+                logger.info("Added cable %s with %s segments.", path, len(cable_bodies))

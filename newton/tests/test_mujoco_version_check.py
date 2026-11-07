@@ -7,6 +7,7 @@ import warnings
 from unittest import mock
 
 from newton._src.solvers.mujoco import solver_mujoco
+from newton.exceptions import NewtonWarning
 
 _MOCK_REQUIREMENTS = (
     "mujoco~=3.8.0 ; extra == 'sim'",
@@ -38,7 +39,7 @@ class TestMuJoCoVersionCheck(unittest.TestCase):
 
         with mock.patch.object(solver_mujoco.importlib_metadata, "version", side_effect=versions.get):
             with self.assertWarnsRegex(
-                RuntimeWarning,
+                NewtonWarning,
                 r"MuJoCo dependency version mismatch.*mujoco==0\.0\.0.*mujoco-warp==0\.0\.0",
             ):
                 solver_mujoco._warn_if_mujoco_versions_mismatch(
@@ -53,7 +54,7 @@ class TestMuJoCoVersionCheck(unittest.TestCase):
 
         versions = {"mujoco": _matching_version(specs["mujoco"]), "mujoco-warp": mujoco_warp_bad_version}
         with mock.patch.object(solver_mujoco.importlib_metadata, "version", side_effect=versions.get):
-            with self.assertWarnsRegex(RuntimeWarning, f"mujoco-warp=={mujoco_warp_bad_version}"):
+            with self.assertWarnsRegex(NewtonWarning, f"mujoco-warp=={mujoco_warp_bad_version}"):
                 solver_mujoco._warn_if_mujoco_versions_mismatch(
                     types.SimpleNamespace(),
                     types.SimpleNamespace(),
@@ -76,7 +77,7 @@ class TestMuJoCoVersionCheck(unittest.TestCase):
             solver_mujoco.SolverMuJoCo._versions_checked = False
 
             with mock.patch.object(solver_mujoco.importlib_metadata, "version", side_effect=versions.get):
-                with self.assertWarnsRegex(RuntimeWarning, "MuJoCo dependency version mismatch"):
+                with self.assertWarnsRegex(NewtonWarning, "MuJoCo dependency version mismatch"):
                     solver_mujoco.SolverMuJoCo.import_mujoco()
         finally:
             solver_mujoco.SolverMuJoCo._mujoco = previous_mujoco
@@ -113,12 +114,12 @@ class TestMuJoCoVersionCheck(unittest.TestCase):
 
 class TestMuJoCoDeterminismConfig(unittest.TestCase):
     def test_only_dynamic_record_modules_receive_model_bound(self):
+        """Keep static MJWarp modules on generated bounds and route smooth dynamically."""
         solver = object.__new__(solver_mujoco.SolverMuJoCo)
         solver._deterministic = solver_mujoco.wp.DeterministicMode.RUN_TO_RUN
         solver._deterministic_max_records = 17
         smooth_module = types.SimpleNamespace(__name__="mujoco_warp._src.smooth")
-        # sleep's atomics all sit in statically bounded loops, so Warp's
-        # code-generated record bound is sufficient for it.
+        # sleep has statically bounded atomic counts.
         sleep_module = types.SimpleNamespace(__name__="mujoco_warp._src.sleep")
 
         with (
@@ -145,6 +146,58 @@ class TestMuJoCoDeterminismConfig(unittest.TestCase):
                 mock.call(dynamic_options, module=smooth_module),
                 mock.call(generated_options, module=sleep_module),
                 mock.call(generated_options, module=solver_mujoco.kernels),
+                mock.call(
+                    generated_options,
+                    module=solver_mujoco.convert_newton_contacts_to_mjwarp_kernel.module,
+                ),
+            ],
+        )
+
+    def test_solver_and_forward_receive_dynamic_record_bound(self):
+        """Route RUN_TO_RUN model bounds to solver and forward, not static MJWarp modules."""
+        solver = object.__new__(solver_mujoco.SolverMuJoCo)
+        solver._deterministic = solver_mujoco.wp.DeterministicMode.RUN_TO_RUN
+        solver._deterministic_max_records = 17
+        names = (
+            "mujoco_warp._src.smooth",
+            "mujoco_warp._src.solver",
+            "mujoco_warp._src.forward",
+            "mujoco_warp._src.sleep",
+            "mujoco_warp._src.io",
+        )
+        modules = [types.SimpleNamespace(__name__=name) for name in names]
+
+        with (
+            mock.patch.object(
+                solver_mujoco,
+                "_mujoco_warp_deterministic_modules",
+                return_value=modules,
+            ),
+            mock.patch.object(solver, "_set_module_options") as set_module_options,
+        ):
+            solver._set_mujoco_warp_module_options()
+
+        dynamic_options = {
+            "deterministic": solver_mujoco.wp.DeterministicMode.RUN_TO_RUN,
+            "deterministic_max_records": 17,
+        }
+        generated_options = {
+            "deterministic": solver_mujoco.wp.DeterministicMode.RUN_TO_RUN,
+            "deterministic_max_records": 0,
+        }
+        self.assertEqual(
+            set_module_options.call_args_list,
+            [
+                mock.call(dynamic_options, module=modules[0]),
+                mock.call(dynamic_options, module=modules[1]),
+                mock.call(dynamic_options, module=modules[2]),
+                mock.call(generated_options, module=modules[3]),
+                mock.call(generated_options, module=modules[4]),
+                mock.call(generated_options, module=solver_mujoco.kernels),
+                mock.call(
+                    generated_options,
+                    module=solver_mujoco.convert_newton_contacts_to_mjwarp_kernel.module,
+                ),
             ],
         )
 

@@ -21,11 +21,18 @@ from newton._src.solvers.vbd.rigid_vbd_kernels import (
     _eval_body_particle_contact,
     _eval_soft_ef_contact,
     _reset_world_selected,
+    dat_separation_epsilon,
+    evaluate_body_particle_attachment_particle_force_hessian,
     evaluate_body_particle_contact,
+    find_edge_edge_separator,
+    find_vertex_triangle_separator,
+    place_dat_division_plane,
+    planar_truncation_t,
 )
 
 from ...geometry import ParticleFlags
 from ...geometry.kernels import triangle_closest_point
+from ...geometry.soft_contacts_mesh import _soft_contact_force_enabled, _SoftContactFilterData
 from ...geometry.tri_mesh_collision import (
     TriMeshCollisionInfo,
     get_edge_colliding_edges_count,
@@ -42,6 +49,7 @@ from ...utils.mesh import (
 )
 
 # TODO: Grab changes from Warp that has fixed the backward pass
+# SolverVBD(enable_fast_math=True) also approximates sin/cos/tan/exp/log/pow; keep those out of this module
 wp.set_module_options({"enable_backward": False})
 
 VBD_DEBUG_PRINTING_OPTIONS = {
@@ -497,7 +505,7 @@ def _test_compute_force_element_adjacency(
             bd_id, v_order = get_vertex_adjacent_edge_id_order(adjacency, vertex, i_bd)
 
             if edge_indices[bd_id, v_order] != vertex:
-                print("Error!!!")
+                print("Error!!!")  # noqa: T201
                 wp.printf("vertex: %d | num_adj_edges: %d\n", vertex, num_adj_edges)
                 wp.printf("--iBd: %d | ", i_bd)
                 wp.printf("edge id: %d | v_order: %d\n", bd_id, v_order)
@@ -512,7 +520,7 @@ def _test_compute_force_element_adjacency(
             )
 
             if face_indices[face, v_order] != vertex:
-                print("Error!!!")
+                print("Error!!!")  # noqa: T201
                 wp.printf("vertex: %d | num_adj_faces: %d\n", vertex, num_adj_faces)
                 wp.printf("--i_face: %d | face id: %d | v_order: %d\n", i_face, face, v_order)
                 wp.printf(
@@ -559,16 +567,14 @@ def evaluate_neo_hookean_membrane_force_hessian(
     f0 = x01 * DmInv00 + x02 * DmInv10
     f1 = x01 * DmInv01 + x02 * DmInv11
 
-    # Cauchy-Green invariants
-    f0_dot_f0 = wp.dot(f0, f0)
-    f1_dot_f1 = wp.dot(f1, f1)
-    f0_dot_f1 = wp.dot(f0, f1)
-
-    # J_s = area ratio = sqrt(det(F^T F))
-    J_s_sq = f0_dot_f0 * f1_dot_f1 - f0_dot_f1 * f0_dot_f1
+    # The Gram determinant subtracts nearly equal large values for stretched,
+    # almost collinear columns. Use the equivalent cross-product area instead.
+    area_vector = wp.cross(f0, f1)
+    J_s_sq = wp.length_sq(area_vector)
     J_s_sq = wp.max(J_s_sq, 1.0e-20)
     J_s = wp.sqrt(J_s_sq)
     inv_J_s = 1.0 / J_s
+    normal = area_vector * inv_J_s
 
     # Convert Lamé parameters to stable Neo-Hookean parameters per Smith et al.
     # 2018, §3.4 (eq. 13): mu_NH = mu_Lamé, lambda_NH = lambda_Lamé + mu_Lamé.
@@ -577,9 +583,9 @@ def evaluate_neo_hookean_membrane_force_hessian(
     lmbd_safe = wp.sign(lmbd_nh) * wp.max(wp.abs(lmbd_nh), 1.0e-6)
     alpha = 1.0 + mu_nh / lmbd_safe
 
-    # 2D "cofactor" vectors: g_i = dJ_s/df_i
-    g0 = inv_J_s * (f1_dot_f1 * f0 - f0_dot_f1 * f1)
-    g1 = inv_J_s * (f0_dot_f0 * f1 - f0_dot_f1 * f0)
+    # Area derivatives in the same cross-product form avoid cancellation too.
+    g0 = wp.cross(f1, normal)
+    g1 = wp.cross(normal, f0)
 
     # First Piola-Kirchhoff stress: P = mu*F + lambda*(J_s - alpha)*[g0, g1]
     s = lmbd_nh * (J_s - alpha)
@@ -614,9 +620,7 @@ def evaluate_neo_hookean_membrane_force_hessian(
     # Cross-column vector for cofactor-derivative contraction
     w = f1 * df0_dx - f0 * df1_dx
 
-    I_coeff = mu_nh * (df0_dx_sq + df1_dx_sq) + r * (
-        df0_dx_sq * f1_dot_f1 + df1_dx_sq * f0_dot_f0 - 2.0 * df0_dx * df1_dx * f0_dot_f1
-    )
+    I_coeff = mu_nh * (df0_dx_sq + df1_dx_sq) + r * wp.length_sq(w)
 
     I33 = wp.identity(n=3, dtype=float)
     hessian = I_coeff * I33 + c1 * wp.outer(dJ_dx, dJ_dx) - r * wp.outer(w, w)
@@ -624,6 +628,10 @@ def evaluate_neo_hookean_membrane_force_hessian(
     # Objective damping based on the metric C = F^T F, so rigid rotations do not damp.
     if damping > 0.0:
         inv_dt = 1.0 / dt
+
+        f0_dot_f0 = wp.dot(f0, f0)
+        f1_dot_f1 = wp.dot(f1, f1)
+        f0_dot_f1 = wp.dot(f0, f1)
 
         x0_prev = pos_anchor[v0]
         x01_prev = pos_anchor[v1] - x0_prev
@@ -850,9 +858,10 @@ def evaluate_self_contact_force_norm(dis: float, collision_radius: float, k: flo
     dEdD = wp.float32(0.0)
     d2E_dDdD = wp.float32(0.0)
 
-    # C2 continuity calculation
+    # C2 continuity calculation; d_min follows tau for radii below 20 um so the
+    # barrier interval (d_min, tau) never empties.
     tau = collision_radius * 0.5
-    d_min = 1.0e-5
+    d_min = wp.min(1.0e-5, 0.5 * tau)
     if tau > dis > d_min:
         # Log-barrier region: E ∝ -ln(dis)
         k2 = tau * tau * k
@@ -1560,7 +1569,7 @@ def accumulate_self_contact_force_and_hessian(
     tri_indices: wp.array2d[wp.int32],
     edge_indices: wp.array2d[wp.int32],
     # self contact
-    collision_info_array: wp.array[TriMeshCollisionInfo],
+    collision_info: TriMeshCollisionInfo,
     collision_radius: float,
     soft_contact_ke: float,
     soft_contact_kd: float,
@@ -1572,8 +1581,6 @@ def accumulate_self_contact_force_and_hessian(
     particle_hessians: wp.array[wp.mat33],
 ):
     t_id = wp.tid()
-    collision_info = collision_info_array[0]
-
     primitive_id = t_id // NUM_THREADS_PER_COLLISION_PRIMITIVE
     t_id_current_primitive = t_id % NUM_THREADS_PER_COLLISION_PRIMITIVE
 
@@ -1840,6 +1847,48 @@ def accumulate_spring_force_and_hessian(
 
 
 @wp.kernel
+def accumulate_body_particle_attachment_force_and_hessian(
+    dt: float,
+    current_color: int,
+    particle_q_prev: wp.array[wp.vec3],
+    particle_q: wp.array[wp.vec3],
+    particle_colors: wp.array[int],
+    body_q: wp.array[wp.transform],
+    body_q_prev: wp.array[wp.transform],
+    attachment_body: wp.array[int],
+    attachment_particle: wp.array[int],
+    attachment_body_point: wp.array[wp.vec3],
+    attachment_stiffness: wp.array[float],
+    attachment_damping: wp.array[float],
+    attachment_enabled: wp.array[bool],
+    particle_forces: wp.array[wp.vec3],
+    particle_hessians: wp.array[wp.mat33],
+):
+    """Accumulate particle-body attachment forces and Hessians on particles."""
+    attachment = wp.tid()
+    if not attachment_enabled[attachment]:
+        return
+
+    particle = attachment_particle[attachment]
+    if particle_colors[particle] != current_color:
+        return
+
+    body = attachment_body[attachment]
+    force, hessian = evaluate_body_particle_attachment_particle_force_hessian(
+        particle_q[particle],
+        particle_q_prev[particle],
+        body_q[body],
+        body_q_prev[body],
+        attachment_body_point[attachment],
+        attachment_stiffness[attachment],
+        attachment_damping[attachment],
+        dt,
+    )
+    wp.atomic_add(particle_forces, particle, force)
+    wp.atomic_add(particle_hessians, particle, hessian)
+
+
+@wp.kernel
 def accumulate_contact_force_and_hessian_no_self_contact(
     # inputs
     dt: float,
@@ -1907,6 +1956,7 @@ def accumulate_contact_force_and_hessian_no_self_contact(
                 contact_normal,
                 shape_margin,
                 dt,
+                False,
             )
             wp.atomic_add(particle_forces, particle_idx, body_contact_force)
             wp.atomic_add(particle_hessians, particle_idx, body_contact_hessian)
@@ -1915,31 +1965,6 @@ def accumulate_contact_force_and_hessian_no_self_contact(
 # =============================================================================
 # Planar DAT (Divide and Truncate) kernels
 # =============================================================================
-
-
-@wp.func
-def segment_plane_intersects(
-    v: wp.vec3,
-    delta_v: wp.vec3,
-    n: wp.vec3,
-    d: wp.vec3,
-    eps_parallel: float,  # e.g., 1e-8
-    eps_intersect_near: float,  # e.g., 1e-8
-    eps_intersect_far: float,  # e.g., 1e-8
-    coplanar_counts: bool,  # True if you want a coplanar segment to count as "hit"
-) -> bool:
-    # Plane eq: n·(p - d) = 0
-    # Segment: p(t) = v + t * delta_v,  t in [0, 1]
-    nv = wp.dot(n, delta_v)
-    num = -wp.dot(n, v - d)
-
-    # Parallel (or nearly): either coplanar or no hit
-    if wp.abs(nv) < eps_parallel:
-        return coplanar_counts and (wp.abs(num) < eps_parallel)
-
-    t = num / nv
-    # consider tiny tolerance at ends
-    return (t >= eps_intersect_near) and (t <= 1.0 + eps_intersect_far)
 
 
 @wp.func
@@ -1953,17 +1978,19 @@ def create_vertex_triangle_division_plane_closest_pt(
     t3: wp.vec3,
     delta_t3: wp.vec3,
 ):
-    """
-    n points to the vertex side
-    """
-    closest_p, _bary, _feature_type = triangle_closest_point(t1, t2, t3, v)
+    """Build a certified soft-self VT plane whose normal points toward the vertex."""
+    coordinate_scale = float(1.0)
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(v)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(t1)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(t2)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(t3)))
+    separation_eps = dat_separation_epsilon(coordinate_scale)
 
-    n_hat = v - closest_p
-
-    if wp.length(n_hat) < 1e-12:
-        return wp.vector(False, False, False, False, length=4, dtype=wp.bool), wp.vec3(0.0), v
-
-    n = wp.normalize(n_hat)
+    valid, n, _vertex_support, triangle_support, gap, _candidate_index = find_vertex_triangle_separator(
+        v, t1, t2, t3, wp.vec3(0.0), separation_eps
+    )
+    if not valid:
+        return False, wp.vec3(0.0), v, separation_eps
 
     delta_v_n = wp.max(-wp.dot(n, delta_v), 0.0)
     delta_t_n = wp.max(
@@ -1975,101 +2002,8 @@ def create_vertex_triangle_division_plane_closest_pt(
         )
     )
 
-    if delta_t_n + delta_v_n == 0.0:
-        d = closest_p + 0.5 * n_hat
-    else:
-        lmbd = delta_t_n / (delta_t_n + delta_v_n)
-        lmbd = wp.clamp(lmbd, 0.05, 0.95)
-        d = closest_p + lmbd * n_hat
-
-    if delta_v_n == 0.0:
-        is_dummy_for_v = True
-    else:
-        is_dummy_for_v = not segment_plane_intersects(v, delta_v, n, d, 1e-6, -1e-8, 1e-8, False)
-
-    if delta_t_n == 0.0:
-        is_dummy_for_t_1 = True
-        is_dummy_for_t_2 = True
-        is_dummy_for_t_3 = True
-    else:
-        is_dummy_for_t_1 = not segment_plane_intersects(t1, delta_t1, n, d, 1e-6, -1e-8, 1e-8, False)
-        is_dummy_for_t_2 = not segment_plane_intersects(t2, delta_t2, n, d, 1e-6, -1e-8, 1e-8, False)
-        is_dummy_for_t_3 = not segment_plane_intersects(t3, delta_t3, n, d, 1e-6, -1e-8, 1e-8, False)
-
-    return (
-        wp.vector(is_dummy_for_v, is_dummy_for_t_1, is_dummy_for_t_2, is_dummy_for_t_3, length=4, dtype=wp.bool),
-        n,
-        d,
-    )
-
-
-@wp.func
-def robust_edge_pair_normal(
-    e0_v0_pos: wp.vec3,
-    e0_v1_pos: wp.vec3,
-    e1_v0_pos: wp.vec3,
-    e1_v1_pos: wp.vec3,
-    eps: float = 1.0e-6,
-) -> wp.vec3:
-    # Edge directions
-    dir0 = e0_v1_pos - e0_v0_pos
-    dir1 = e1_v1_pos - e1_v0_pos
-
-    len0 = wp.length(dir0)
-    len1 = wp.length(dir1)
-
-    if len0 > eps:
-        dir0 = dir0 / len0
-    else:
-        dir0 = wp.vec3(0.0, 0.0, 0.0)
-
-    if len1 > eps:
-        dir1 = dir1 / len1
-    else:
-        dir1 = wp.vec3(0.0, 0.0, 0.0)
-
-    # Primary: cross of two valid directions
-    n = wp.cross(dir0, dir1)
-    len_n = wp.length(n)
-    if len_n > eps:
-        return n / len_n
-
-    # Parallel or degenerate: pick best non-zero direction
-    reference = dir0
-    if wp.length(reference) <= eps:
-        reference = dir1
-
-    if wp.length(reference) <= eps:
-        # Both edges collapsed: fall back to canonical axis
-        return wp.vec3(1.0, 0.0, 0.0)
-
-    # Try bridge vector between midpoints
-    bridge = 0.5 * ((e1_v0_pos + e1_v1_pos) - (e0_v0_pos + e0_v1_pos))
-    bridge_len = wp.length(bridge)
-    if bridge_len > eps:
-        n = wp.cross(reference, bridge / bridge_len)
-        len_n = wp.length(n)
-        if len_n > eps:
-            return n / len_n
-
-    # Use an axis guaranteed (numerically) to be non-parallel
-    fallback_axis = wp.vec3(1.0, 0.0, 0.0)
-    if wp.abs(wp.dot(reference, fallback_axis)) > 0.9:
-        fallback_axis = wp.vec3(0.0, 1.0, 0.0)
-
-    n = wp.cross(reference, fallback_axis)
-    len_n = wp.length(n)
-    if len_n > eps:
-        return n / len_n
-
-    # Final guard: use the remaining canonical axis
-    fallback_axis = wp.vec3(0.0, 0.0, 1.0)
-    n = wp.cross(reference, fallback_axis)
-    len_n = wp.length(n)
-    if len_n > eps:
-        return n / len_n
-
-    return wp.vec3(1.0, 0.0, 0.0)
+    d, _lmbd = place_dat_division_plane(n, triangle_support, gap, delta_v_n, delta_t_n, separation_eps)
+    return True, n, d, separation_eps
 
 
 @wp.func
@@ -2083,22 +2017,19 @@ def create_edge_edge_division_plane_closest_pt(
     e1_v1_pos: wp.vec3,
     delta_e1_v1: wp.vec3,
 ):
-    st = wp.closest_point_edge_edge(e0_v0_pos, e0_v1_pos, e1_v0_pos, e1_v1_pos, 1e-6)
-    s = st[0]
-    t = st[1]
-    c1 = e0_v0_pos + (e0_v1_pos - e0_v0_pos) * s
-    c2 = e1_v0_pos + (e1_v1_pos - e1_v0_pos) * t
+    """Build a certified soft-self EE plane whose normal points toward edge 0."""
+    coordinate_scale = float(1.0)
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(e0_v0_pos)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(e0_v1_pos)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(e1_v0_pos)))
+    coordinate_scale = wp.max(coordinate_scale, wp.max(wp.abs(e1_v1_pos)))
+    separation_eps = dat_separation_epsilon(coordinate_scale)
 
-    n_hat = c1 - c2
-
-    if wp.length(n_hat) < 1e-12:
-        return (
-            wp.vector(False, False, False, False, length=4, dtype=wp.bool),
-            robust_edge_pair_normal(e0_v0_pos, e0_v1_pos, e1_v0_pos, e1_v1_pos),
-            c1 * 0.5 + c2 * 0.5,
-        )
-
-    n = wp.normalize(n_hat)
+    valid, n, _edge0_support, edge1_support, gap, _candidate_index = find_edge_edge_separator(
+        e0_v0_pos, e0_v1_pos, e1_v0_pos, e1_v1_pos, wp.vec3(0.0), separation_eps
+    )
+    if not valid:
+        return False, wp.vec3(0.0), e0_v0_pos, separation_eps
 
     delta_e0 = wp.max(
         wp.vec3(
@@ -2115,75 +2046,8 @@ def create_edge_edge_division_plane_closest_pt(
         )
     )
 
-    if delta_e0 + delta_e1 == 0.0:
-        d = c2 + 0.5 * n_hat
-    else:
-        lmbd = delta_e1 / (delta_e1 + delta_e0)
-
-        lmbd = wp.clamp(lmbd, 0.05, 0.95)
-        d = c2 + lmbd * n_hat
-
-    if delta_e0 == 0.0:
-        is_dummy_for_e0_v0 = True
-        is_dummy_for_e0_v1 = True
-    else:
-        is_dummy_for_e0_v0 = not segment_plane_intersects(e0_v0_pos, delta_e0_v0, n, d, 1e-6, -1e-8, 1e-6, False)
-        is_dummy_for_e0_v1 = not segment_plane_intersects(e0_v1_pos, delta_e0_v1, n, d, 1e-6, -1e-8, 1e-6, False)
-
-    if delta_e1 == 0.0:
-        is_dummy_for_e1_v0 = True
-        is_dummy_for_e1_v1 = True
-    else:
-        is_dummy_for_e1_v0 = not segment_plane_intersects(e1_v0_pos, delta_e1_v0, n, d, 1e-6, -1e-8, 1e-6, False)
-        is_dummy_for_e1_v1 = not segment_plane_intersects(e1_v1_pos, delta_e1_v1, n, d, 1e-6, -1e-8, 1e-6, False)
-
-    return (
-        wp.vector(
-            is_dummy_for_e0_v0, is_dummy_for_e0_v1, is_dummy_for_e1_v0, is_dummy_for_e1_v1, length=4, dtype=wp.bool
-        ),
-        n,
-        d,
-    )
-
-
-@wp.func
-def planar_truncation(
-    v: wp.vec3, delta_v: wp.vec3, n: wp.vec3, d: wp.vec3, eps: float, gamma_r: float, gamma_min: float = 1e-3
-):
-    nv = wp.dot(n, delta_v)
-    num = wp.dot(n, d - v)
-
-    # Parallel (or nearly): do not truncate
-    if wp.abs(nv) < eps:
-        return delta_v
-
-    t = num / nv
-
-    t = wp.max(wp.min(t * gamma_r, t - gamma_min), 0.0)
-    if t >= 1:
-        return delta_v
-    else:
-        return t * delta_v
-
-
-@wp.func
-def planar_truncation_t(
-    v: wp.vec3, delta_v: wp.vec3, n: wp.vec3, d: wp.vec3, eps: float, gamma_r: float, gamma_min: float = 1e-3
-):
-    denom = wp.dot(n, delta_v)
-
-    # Parallel (or nearly parallel) → no intersection
-    if wp.abs(denom) < eps:
-        return 1.0
-
-    # Solve: dot(n, v + t*delta_v - d) = 0
-    t = wp.dot(n, d - v) / denom
-
-    if t < 0:
-        return 1.0
-
-    t = wp.clamp(wp.min(t * gamma_r, t - gamma_min), 0.0, 1.0)
-    return t
+    d, _lmbd = place_dat_division_plane(n, edge1_support, gap, delta_e0, delta_e1, separation_eps)
+    return True, n, d, separation_eps
 
 
 @wp.kernel
@@ -2193,14 +2057,12 @@ def apply_planar_truncation_parallel_by_collision(
     displacement_in: wp.array[wp.vec3],
     tri_indices: wp.array2d[wp.int32],
     edge_indices: wp.array2d[wp.int32],
-    collision_info_array: wp.array[TriMeshCollisionInfo],
-    parallel_eps: float,
+    collision_info: TriMeshCollisionInfo,
     gamma: float,
     truncation_t_out: wp.array[float],
 ):
+    """Truncate particle displacements against soft self-contact division planes, one thread group per EE or VT pair."""
     t_id = wp.tid()
-    collision_info = collision_info_array[0]
-
     primitive_id = t_id // NUM_THREADS_PER_COLLISION_PRIMITIVE
     t_id_current_primitive = t_id % NUM_THREADS_PER_COLLISION_PRIMITIVE
 
@@ -2234,7 +2096,7 @@ def apply_planar_truncation_parallel_by_collision(
                 delta_e2_v2 = displacement_in[e2_v2]
 
                 # n points to the edge 1 side
-                is_dummy, n, d = create_edge_edge_division_plane_closest_pt(
+                valid_plane, n, d, separation_eps = create_edge_edge_division_plane_closest_pt(
                     e1_v1_pos,
                     delta_e1_v1,
                     e1_v2_pos,
@@ -2245,21 +2107,24 @@ def apply_planar_truncation_parallel_by_collision(
                     delta_e2_v2,
                 )
 
-                # For each, check the corresponding is_dummy entry in the vec4 is_dummy
-                if not is_dummy[0]:
-                    t = planar_truncation_t(e1_v1_pos, delta_e1_v1, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, e1_v1, t)
-                if not is_dummy[1]:
-                    t = planar_truncation_t(e1_v2_pos, delta_e1_v2, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, e1_v2, t)
-                if not is_dummy[2]:
-                    t = planar_truncation_t(e2_v1_pos, delta_e2_v1, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, e2_v1, t)
-                if not is_dummy[3]:
-                    t = planar_truncation_t(e2_v2_pos, delta_e2_v2, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, e2_v2, t)
-
-                # planar truncation for 2 sides
+                # Without a strict separator at the reference (the edges intersect within
+                # float precision) DAT cannot tell which side is safe, so the pair is left
+                # unconstrained for this pass: freezing it would pin both edges at the
+                # reference indefinitely. Contact forces separate it and a later detection
+                # certifies a separator.
+                if valid_plane:
+                    t = planar_truncation_t(e1_v1_pos, delta_e1_v1, n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, e1_v1, t)
+                    t = planar_truncation_t(e1_v2_pos, delta_e1_v2, n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, e1_v2, t)
+                    t = planar_truncation_t(e2_v1_pos, delta_e2_v1, -n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, e2_v1, t)
+                    t = planar_truncation_t(e2_v2_pos, delta_e2_v2, -n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, e2_v2, t)
             collision_buffer_counter += NUM_THREADS_PER_COLLISION_PRIMITIVE
 
     # process vertex-triangle collisions
@@ -2289,7 +2154,7 @@ def apply_planar_truncation_parallel_by_collision(
                 delta_t2 = displacement_in[tri_b]
                 delta_t3 = displacement_in[tri_c]
 
-                is_dummy, n, d = create_vertex_triangle_division_plane_closest_pt(
+                valid_plane, n, d, separation_eps = create_vertex_triangle_division_plane_closest_pt(
                     colliding_particle_pos,
                     colliding_particle_displacement,
                     t1,
@@ -2300,21 +2165,23 @@ def apply_planar_truncation_parallel_by_collision(
                     delta_t3,
                 )
 
-                # planar truncation for 2 sides
-                if not is_dummy[0]:
+                # Same policy as the edge-edge pass: a zero-gap or intersecting pair has no
+                # strict separator and is left unconstrained for this pass.
+                if valid_plane:
                     t = planar_truncation_t(
-                        colliding_particle_pos, colliding_particle_displacement, n, d, parallel_eps, gamma
+                        colliding_particle_pos, colliding_particle_displacement, n, d, gamma, separation_eps
                     )
-                    wp.atomic_min(truncation_t_out, particle_idx, t)
-                if not is_dummy[1]:
-                    t = planar_truncation_t(t1, delta_t1, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, tri_a, t)
-                if not is_dummy[2]:
-                    t = planar_truncation_t(t2, delta_t2, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, tri_b, t)
-                if not is_dummy[3]:
-                    t = planar_truncation_t(t3, delta_t3, n, d, parallel_eps, gamma)
-                    wp.atomic_min(truncation_t_out, tri_c, t)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, particle_idx, t)
+                    t = planar_truncation_t(t1, delta_t1, -n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, tri_a, t)
+                    t = planar_truncation_t(t2, delta_t2, -n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, tri_b, t)
+                    t = planar_truncation_t(t3, delta_t3, -n, d, gamma, separation_eps)
+                    if t < 1.0:
+                        wp.atomic_min(truncation_t_out, tri_c, t)
 
             collision_buffer_counter += NUM_THREADS_PER_COLLISION_PRIMITIVE
 
@@ -2352,7 +2219,7 @@ def build_particle_body_contact_adjacency_active(
     particle_contact_head: wp.array[int],
     particle_contact_next: wp.array[int],
 ):
-    """Build linked per-particle incidence lists over the compact active contact prefix."""
+    """Build per-particle candidate lists independent of current force eligibility."""
     contact_index = wp.tid()
     if contact_index >= min(body_particle_contact_max, body_particle_contact_count[0]):
         return
@@ -2381,6 +2248,7 @@ def gather_particle_body_contact_force_and_hessian(
     pos: wp.array[wp.vec3],
     # body-particle contact
     friction_epsilon: float,
+    rigid_body_particle_contact_use_log_barrier: bool,
     particle_radius: wp.array[float],
     body_particle_contact_indices: wp.array[wp.vec3i],
     particle_contact_head: wp.array[int],
@@ -2400,6 +2268,7 @@ def gather_particle_body_contact_force_and_hessian(
     contact_normal: wp.array[wp.vec3],
     shape_margin: wp.array[float],
     contact_barycentric: wp.array[wp.vec3],
+    contact_filter: _SoftContactFilterData,
     # outputs
     particle_forces: wp.array[wp.vec3],
     particle_hessians: wp.array[wp.mat33],
@@ -2430,6 +2299,8 @@ def gather_particle_body_contact_force_and_hessian(
         last = node
 
         contact_index = node // 3
+        if not _soft_contact_force_enabled(contact_index, contact_filter):
+            continue
         corner = node - 3 * contact_index
         corners = body_particle_contact_indices[contact_index]
         contact_ke = body_particle_contact_penalty_k[contact_index]
@@ -2458,6 +2329,7 @@ def gather_particle_body_contact_force_and_hessian(
                 contact_normal,
                 shape_margin,
                 dt,
+                rigid_body_particle_contact_use_log_barrier,
             )
             force += contact_force
             hessian += contact_hessian
@@ -2485,6 +2357,7 @@ def gather_particle_body_contact_force_and_hessian(
                 contact_normal,
                 shape_margin,
                 dt,
+                rigid_body_particle_contact_use_log_barrier,
             )
             weight = bary[corner]
             force += weight * contact_force
@@ -2493,6 +2366,137 @@ def gather_particle_body_contact_force_and_hessian(
     # Plain write, no atomics: later spring/self-contact kernels accumulate on top.
     particle_forces[particle_index] = force
     particle_hessians[particle_index] = hessian
+
+
+@wp.kernel
+def scatter_particle_body_contact_force_and_hessian(
+    # inputs
+    dt: float,
+    current_color: int,
+    pos_anchor: wp.array[wp.vec3],
+    pos: wp.array[wp.vec3],
+    particle_colors: wp.array[int],
+    # body-particle contact
+    friction_epsilon: float,
+    rigid_body_particle_contact_use_log_barrier: bool,
+    particle_radius: wp.array[float],
+    body_particle_contact_indices: wp.array[wp.vec3i],
+    body_particle_contact_count: wp.array[int],
+    contact_filter: _SoftContactFilterData,
+    body_particle_contact_max: int,
+    worker_count: int,
+    # per-contact soft AVBD parameters for body-particle contacts (shared with rigid side)
+    body_particle_contact_penalty_k: wp.array[float],
+    body_particle_contact_material_kd: wp.array[float],
+    body_particle_contact_material_mu: wp.array[float],
+    shape_body: wp.array[int],
+    body_q: wp.array[wp.transform],
+    body_q_prev: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    contact_shape: wp.array[int],
+    contact_body_pos: wp.array[wp.vec3],
+    contact_body_vel: wp.array[wp.vec3],
+    contact_normal: wp.array[wp.vec3],
+    shape_margin: wp.array[float],
+    contact_barycentric: wp.array[wp.vec3],
+    # outputs
+    particle_forces: wp.array[wp.vec3],
+    particle_hessians: wp.array[wp.mat33],
+):
+    """Accumulate body-contact forces per contact record over the active prefix.
+
+    Launched once per color per iteration with ``dim = worker_count``, a host-static grid no larger
+    than the capacity. Each worker strides over the active records ``tid, tid + worker_count, ...``
+    read from the device-side count, so the work follows the active count rather than the capacity
+    and the launch stays CUDA-graph safe. A record is evaluated only when one of its corners has the
+    active color, so the evaluations per iteration equal the per-particle gather's (one per corner
+    incidence) but run one record per thread. Contributions are added with atomics, so the summation
+    order follows scheduling; deterministic modes use
+    :func:`gather_particle_body_contact_force_and_hessian` instead.
+    """
+    count = min(body_particle_contact_max, body_particle_contact_count[0])
+    contact_index = wp.tid()
+    while contact_index < count:
+        corners = body_particle_contact_indices[contact_index]
+        contact_ke = body_particle_contact_penalty_k[contact_index]
+        contact_kd = body_particle_contact_material_kd[contact_index]
+        contact_mu = body_particle_contact_material_mu[contact_index]
+
+        if corners[1] < 0:
+            # Particle record (p, -1, -1).
+            particle_index = corners[0]
+            if particle_colors[particle_index] == current_color and _soft_contact_force_enabled(
+                contact_index, contact_filter
+            ):
+                contact_force, contact_hessian = _eval_body_particle_contact(
+                    particle_index,
+                    pos[particle_index],
+                    pos_anchor[particle_index],
+                    contact_index,
+                    contact_ke,
+                    contact_kd,
+                    contact_mu,
+                    friction_epsilon,
+                    particle_radius,
+                    shape_body,
+                    body_q,
+                    body_q_prev,
+                    body_qd,
+                    body_com,
+                    contact_shape,
+                    contact_body_pos,
+                    contact_body_vel,
+                    contact_normal,
+                    shape_margin,
+                    dt,
+                    rigid_body_particle_contact_use_log_barrier,
+                )
+                wp.atomic_add(particle_forces, particle_index, contact_force)
+                wp.atomic_add(particle_hessians, particle_index, contact_hessian)
+        else:
+            # Edge/face record: evaluate once, only if a corner belongs to the active color.
+            active = False
+            for i in range(3):
+                corner_index = corners[i]
+                if corner_index >= 0:
+                    if particle_colors[corner_index] == current_color:
+                        active = True
+            if active and _soft_contact_force_enabled(contact_index, contact_filter):
+                bary = contact_barycentric[contact_index]
+                contact_force, contact_hessian, _cp_world = _eval_soft_ef_contact(
+                    contact_index,
+                    corners,
+                    bary,
+                    pos,
+                    pos_anchor,
+                    particle_radius,
+                    contact_ke,
+                    contact_kd,
+                    contact_mu,
+                    friction_epsilon,
+                    shape_body,
+                    body_q,
+                    body_q_prev,
+                    body_qd,
+                    body_com,
+                    contact_shape,
+                    contact_body_pos,
+                    contact_body_vel,
+                    contact_normal,
+                    shape_margin,
+                    dt,
+                    rigid_body_particle_contact_use_log_barrier,
+                )
+                for i in range(3):
+                    corner_index = corners[i]
+                    if corner_index >= 0:
+                        if particle_colors[corner_index] == current_color:
+                            weight = bary[i]
+                            wp.atomic_add(particle_forces, corner_index, weight * contact_force)
+                            wp.atomic_add(particle_hessians, corner_index, (weight * weight) * contact_hessian)
+
+        contact_index += worker_count
 
 
 @functools.cache
@@ -2510,7 +2514,7 @@ def make_solve_elasticity_tile(include_triangles: bool, include_tets: bool, two_
     # _warp_half_reduce_sum hardcodes a width-16 shuffle ladder.
     assert TILE_SIZE_TRI_MESH_ELASTICITY_SOLVE == 16
 
-    @wp.kernel(module="unique")
+    @wp.kernel(module="unique", enable_backward=False)
     def solve_elasticity_tile_kernel(
         dt: float,
         particle_ids_in_color: wp.array[wp.int32],
@@ -2711,8 +2715,6 @@ def make_solve_elasticity_tile(include_triangles: bool, include_tets: bool, two_
                 )
                 particle_displacements[particle_index] = particle_displacements[particle_index] + h_inv * f_total
 
-    # module="unique" kernels do not inherit this file's module options.
-    wp.set_module_options({"enable_backward": False}, module=solve_elasticity_tile_kernel.module)
     return solve_elasticity_tile_kernel
 
 
@@ -2868,7 +2870,7 @@ def accumulate_contact_force_and_hessian(
     tri_indices: wp.array2d[wp.int32],
     edge_indices: wp.array2d[wp.int32],
     # self contact
-    collision_info_array: wp.array[TriMeshCollisionInfo],
+    collision_info: TriMeshCollisionInfo,
     collision_radius: float,
     soft_contact_ke: float,
     soft_contact_kd: float,
@@ -2896,8 +2898,6 @@ def accumulate_contact_force_and_hessian(
     particle_hessians: wp.array[wp.mat33],
 ):
     t_id = wp.tid()
-    collision_info = collision_info_array[0]
-
     primitive_id = t_id // NUM_THREADS_PER_COLLISION_PRIMITIVE
     t_id_current_primitive = t_id % NUM_THREADS_PER_COLLISION_PRIMITIVE
 
