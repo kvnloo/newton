@@ -55,7 +55,7 @@ from .loss import CalibrationLoss
 # sim->goal sum covers a fixed number of axis samples and fits int32.
 _CHAMFER_FIXED = wp.constant(16.0)  # fixed-point scale, 1/16 px resolution
 _CHAMFER_MAX_PX = 1024.0  # distance clamp; bounds each sample's contribution
-CHAMFER_MISS = 2.0  # frame score when the sim projects nothing
+CHAMFER_MISS = 2.0  # minimum loss in goal lengths when nothing projects
 
 # Samples along the projected cable axis for the sim->goal direction, at uniform
 # arc length: sample k sits at (k + 0.5) / N of the visible length, so each sample
@@ -375,6 +375,10 @@ class CalibrationLossChamfer(CalibrationLoss):
         accumulator.dist_sum.zero_()
         accumulator.gdist_sum.zero_()
         edt = goal.device_edt(accumulator.device)
+        # Both directional distances are capped at _CHAMFER_MAX_PX, so any
+        # visible axis scores at most _CHAMFER_MAX_PX / goal.extent. Make a
+        # fully hidden axis no cheaper than any visible off-frame candidate.
+        miss = max(CHAMFER_MISS, _CHAMFER_MAX_PX / goal.extent)
         wp.launch(
             _chamfer_axis_kernel,
             dim=(n, int(_CHAMFER_AXIS_SAMPLES)),
@@ -398,7 +402,7 @@ class CalibrationLossChamfer(CalibrationLoss):
                 accumulator.gdist_sum,
                 goal.count,
                 float(goal.extent),
-                float(CHAMFER_MISS),
+                float(miss),
             ],
             outputs=[accumulator.loss],
             device=accumulator.device,

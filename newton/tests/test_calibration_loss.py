@@ -102,6 +102,20 @@ class TestCalibrationChamfer(unittest.TestCase):
         score = CHAMFER.score(goal, None, CROP, geom=make_axis(offset_px=4.0))
         self.assertAlmostEqual(score, 4.0 / GOAL_LENGTH, places=6)
 
+    def test_hidden_cable_not_cheaper_than_offcrop_on_cpu(self):
+        """A missing projection must not beat a distant off-frame candidate."""
+        goal = CHAMFER.prepare(make_goal_mask())
+        aligned = CHAMFER.score(goal, None, CROP, geom=make_axis())
+        offcrop = CHAMFER.score(goal, None, CROP, geom=make_axis(offset_px=30.0))
+        hidden = CHAMFER.score(goal, None, CROP, geom=np.full((11, 2), np.nan, dtype=np.float32))
+
+        # 512 off-crop samples pay 1024 px each; the goal's 41 pixels
+        # are each 30 px from the projected segment. Goal extent is 40 px.
+        self.assertAlmostEqual(aligned, 0.0, places=6)
+        self.assertAlmostEqual(offcrop, (1024.0 + 30.0) / (2.0 * GOAL_LENGTH), places=5)
+        self.assertAlmostEqual(hidden, max(CHAMFER_MISS, 1024.0 / GOAL_LENGTH), places=5)
+        self.assertGreaterEqual(hidden, offcrop)
+
     def test_empty_goal_mask_is_refused(self):
         """Refuse a goal frame without cable pixels instead of measuring to a point outside it."""
         empty = np.zeros_like(make_goal_mask())
@@ -161,14 +175,14 @@ def test_nodes_behind_the_lens_are_skipped(test, device):
     """Verify segments touching a node behind the lens are left out.
 
     Hiding nodes 0 to 4 leaves the axis from x 50 to 70, which scores as that
-    half axis alone. With every node hidden, the frame scores CHAMFER_MISS.
+    half axis alone. With every node hidden, the frame takes the visibility miss penalty.
     """
     axis = make_axis()
     half, partly_hidden, all_hidden = chamfer_on(
         device, make_axis(x_start=50.0), make_hidden(axis, [0, 1, 2, 3, 4]), make_hidden(axis, list(range(11)))
     )
     test.assertAlmostEqual(partly_hidden, half, places=6)
-    test.assertAlmostEqual(all_hidden, CHAMFER_MISS, places=6)
+    test.assertAlmostEqual(all_hidden, max(CHAMFER_MISS, 1024.0 / GOAL_LENGTH), places=5)
 
 
 def test_accumulator_sums_over_frames(test, device):
