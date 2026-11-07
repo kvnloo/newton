@@ -17,6 +17,7 @@ import numpy as np
 import warp as wp
 
 import newton
+from newton.exceptions import NewtonWarning
 from newton._src.utils.import_usd_deformable_utils import _BUILDER_STOCK_PARTICLE_RADIUS
 from newton.tests._usd_deformable_test_utils import (
     _apply_deformable_body_api,
@@ -342,32 +343,57 @@ class TestUSDDeformableVolume(unittest.TestCase):
         for i in range(q0, q1):
             self.assertAlmostEqual(builder.particle_radius[i], builder.default_particle_radius, places=9)
 
-    def test_volume_particle_radius_fallback_warns_on_builder_override(self):
-        """Verify that a user-set ModelBuilder.default_particle_radius triggers one summary
-        warning per add_usd() call with a migration recipe, while the half-default-thickness
-        fallback still applies."""
-        # The stock-default constant must track ModelBuilder's default, so the warning never
-        # fires on the stock value or misses a real override.
+    def test_sim_volume_stock_radius_uses_stage_units(self):
+        """Verify the stock volume radius equals half a millimeter in physical units."""
+        from pxr import UsdGeom
+
         self.assertEqual(newton.ModelBuilder().default_particle_radius, _BUILDER_STOCK_PARTICLE_RADIUS)
-
-        for override, expect_warning in ((0.05, True), (_BUILDER_STOCK_PARTICLE_RADIUS, False)):
-            with self.subTest(override=override):
+        for meters_per_unit, expected_radius in ((1.0, 0.0005), (0.01, 0.05)):
+            with self.subTest(meters_per_unit=meters_per_unit):
                 stage = _deformable_stage()
-                _author_unit_tet(stage, "/World/SoftA", sim_api=True)
-                _author_unit_tet(stage, "/World/SoftB", sim_api=True)
-
+                UsdGeom.SetStageMetersPerUnit(stage, meters_per_unit)
+                _author_unit_tet(stage, "/World/Soft", sim_api=True)
                 builder = newton.ModelBuilder()
-                builder.default_particle_radius = override
-                with warnings.catch_warnings(record=True) as caught:
+                with warnings.catch_warnings(record=True):
                     warnings.simplefilter("always")
                     builder.add_usd(stage)
-                mentions = [w for w in caught if "default_particle_radius" in str(w.message)]
-                self.assertEqual(len(mentions), 1 if expect_warning else 0)
-                if expect_warning:
-                    self.assertIn("/World/SoftA", str(mentions[0].message))
-                    self.assertIn("/World/SoftB", str(mentions[0].message))
-                    self.assertEqual(mentions[0].filename, __file__)
-                self.assertTrue(np.allclose(builder.particle_radius, np.full(len(builder.particle_q), 0.0005)))
+                start, end = group_range(builder, "soft", "/World/Soft", "particle")
+                self.assertEqual(end - start, 4)
+                np.testing.assert_allclose(
+                    builder.particle_radius[start:end], [expected_radius] * 4, rtol=0.0, atol=1.0e-7
+                )
+
+    def test_sim_volume_deliberate_builder_radius_survives(self):
+        """Preserve a pre-import builder radius override for simulation TetMeshes."""
+        stage = _deformable_stage()
+        _author_unit_tet(stage, "/World/Soft", sim_api=True)
+        builder = newton.ModelBuilder()
+        builder.default_particle_radius = 0.025
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            builder.add_usd(stage)
+        self.assertFalse(
+            any(isinstance(item.message, NewtonWarning) and "default_particle_radius" in str(item.message)
+                for item in caught)
+        )
+        start, end = group_range(builder, "soft", "/World/Soft", "particle")
+        self.assertEqual(end - start, 4)
+        np.testing.assert_allclose(builder.particle_radius[start:end], [0.025] * 4, rtol=0.0, atol=1.0e-7)
+
+    def test_bare_tetmesh_zero_meters_per_unit_stays_legacy(self):
+        """Avoid a sim-only stage-unit division when importing a legacy bare TetMesh."""
+        from pxr import UsdGeom
+
+        stage = _deformable_stage()
+        UsdGeom.SetStageMetersPerUnit(stage, 0.0)
+        _author_unit_tet(stage, "/World/Legacy", sim_api=False)
+        builder = newton.ModelBuilder()
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            builder.add_usd(stage)
+        start, end = group_range(builder, "soft", "/World/Legacy", "particle")
+        self.assertEqual(end - start, 4)
+        np.testing.assert_allclose(builder.particle_radius[start:end], [0.1] * 4, rtol=0.0, atol=1.0e-7)
 
     def test_bare_tetmesh_ignores_per_point_masses(self):
         """A bare TetMesh (no deformable markers) keeps the legacy import; masses ignored."""
