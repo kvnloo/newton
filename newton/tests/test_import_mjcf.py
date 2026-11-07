@@ -61,6 +61,97 @@ MASSLESS_FIXED_ROOT_WITH_INTERNAL_FIXED_MJCF = """
 
 
 class TestImportMjcfBasic(unittest.TestCase):
+    def test_non_shell_geom_preserves_hollow_shape_default(self):
+        """Keep an explicit hollow default for ordinary geoms."""
+        builder = newton.ModelBuilder()
+        builder.default_shape_cfg.is_solid = False
+        builder.default_shape_cfg.margin = 0.01
+        builder.add_mjcf(
+            '<mujoco><worldbody><body><geom type="sphere" size="0.2" density="3"/></body></worldbody></mujoco>'
+        )
+        self.assertFalse(builder.shape_is_solid[0])
+
+    def test_primitive_shellinertia_matches_native_mujoco(self):
+        """Compute primitive shell mass properties like native MuJoCo."""
+        cases = {
+            "explicit_box": '<geom type="box" size="0.1 0.2 0.3" mass="2" shellinertia="true"/>',
+            "explicit_capsule": '<geom type="capsule" size="0.1 0.2" mass="2" shellinertia="true"/>',
+            "explicit_cylinder": '<geom type="cylinder" size="0.1 0.2" mass="2" shellinertia="true"/>',
+            "explicit_ellipsoid": '<geom type="ellipsoid" size="0.1 0.2 0.3" mass="2" shellinertia="true"/>',
+            "density_sphere": '<geom type="sphere" size="0.2" density="3" shellinertia="true"/>',
+        }
+        mujoco, _ = SolverMuJoCo.import_mujoco()
+
+        for name, geom in cases.items():
+            with self.subTest(name=name):
+                mjcf = f"""
+<mujoco model="{name}">
+    <worldbody>
+        <body name="body">
+            {geom}
+        </body>
+    </worldbody>
+</mujoco>
+"""
+                native_model = mujoco.MjModel.from_xml_string(mjcf)
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(mjcf)
+
+                self.assertAlmostEqual(builder.body_mass[0], native_model.body_mass[1], places=6)
+                np.testing.assert_allclose(
+                    np.diag(np.array(builder.body_inertia[0]).reshape(3, 3)),
+                    native_model.body_inertia[1],
+                    rtol=1.0e-6,
+                    atol=1.0e-8,
+                )
+    def test_review_3738_shell_explicit_inertia(self):
+        """Primitive shells use surface inertia at a fixed authored mass."""
+        cases = (
+            ("box", 'type="box" size="0.1 0.2 0.3"', (0.1230303030303, 0.0957575757576, 0.0551515151515)),
+            ("sphere", 'type="sphere" size="0.2"', (0.0533333333333,) * 3),
+        )
+        for name, shape, expected_diagonal in cases:
+            with self.subTest(shape=name):
+                mjcf = (
+                    '<mujoco><worldbody><body name="body"><geom '
+                    f'{shape} mass="2" shellinertia="true"/>'
+                    '</body></worldbody></mujoco>'
+                )
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(mjcf)
+                self.assertAlmostEqual(builder.body_mass[0], 2.0, places=6)
+                np.testing.assert_allclose(
+                    np.diag(np.asarray(builder.body_inertia[0]).reshape(3, 3)),
+                    expected_diagonal,
+                    rtol=1.0e-6,
+                    atol=1.0e-8,
+                )
+
+    def test_review_3738_shell_density_and_solid_control(self):
+        """Surface density changes shell mass; false retains solid mass."""
+        from math import pi
+
+        cases = (
+            ("true", 0.48 * pi, 0.0128 * pi),
+            ("false", 0.032 * pi, 0.000512 * pi),
+        )
+        for shell, expected_mass, expected_inertia in cases:
+            with self.subTest(shellinertia=shell):
+                mjcf = (
+                    '<mujoco><worldbody><body name="body">'
+                    f'<geom type="sphere" size="0.2" density="3" shellinertia="{shell}"/>'
+                    '</body></worldbody></mujoco>'
+                )
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(mjcf)
+                self.assertAlmostEqual(builder.body_mass[0], expected_mass, places=6)
+                np.testing.assert_allclose(
+                    np.diag(np.asarray(builder.body_inertia[0]).reshape(3, 3)),
+                    [expected_inertia] * 3,
+                    rtol=1.0e-6,
+                    atol=1.0e-8,
+                )
+
     def test_nested_option_flags_match_native_mujoco(self):
         """Preserve later flag overrides and apply gravity to the Newton model."""
         mjcf = """
