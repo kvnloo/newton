@@ -2833,8 +2833,8 @@ class TestSolverCoupledBasic(unittest.TestCase):
     def test_particle_views_deactivate_non_owned_particles(self):
         """Each particle owner view should expose only its owned particles as active."""
         builder = newton.ModelBuilder()
-        builder.add_particle(pos=(0.0, 0.0, 0.0), vel=(0.0, 0.0, 0.0), mass=1.0)
-        builder.add_particle(pos=(0.1, 0.0, 0.0), vel=(0.0, 0.0, 0.0), mass=1.0)
+        builder.add_particle(pos=(0.0, 0.0, 0.0), vel=(0.0, 0.0, 0.0), mass=1.0, radius=0.025)
+        builder.add_particle(pos=(0.1, 0.0, 0.0), vel=(0.0, 0.0, 0.0), mass=1.0, radius=0.025)
         model = builder.finalize(device="cpu")
 
         coupled = SolverCoupled(
@@ -2850,6 +2850,15 @@ class TestSolverCoupledBasic(unittest.TestCase):
         view_b_flags = coupled.view("B").particle_flags.numpy()
         parent_flags = model.particle_flags.numpy()
 
+        # Each entry must build contacts against its own per-step scratch.
+        parent_grid = model.particle_grid
+        self.assertIsNotNone(parent_grid)
+        self.assertIsNot(coupled.view("A").particle_grid, parent_grid)
+        self.assertIsNot(coupled.view("B").particle_grid, parent_grid)
+        self.assertIsNot(coupled.view("A").particle_grid, coupled.view("B").particle_grid)
+        self.assertIs(coupled.solver("A").model.particle_grid, coupled.view("A").particle_grid)
+        self.assertIs(coupled.solver("B").model.particle_grid, coupled.view("B").particle_grid)
+
         self.assertEqual(view_a_flags.shape[0], 2)
         self.assertNotEqual(view_a_flags[0] & active, 0)
         self.assertEqual(view_a_flags[1] & active, 0)
@@ -2857,6 +2866,62 @@ class TestSolverCoupledBasic(unittest.TestCase):
         self.assertNotEqual(view_b_flags[1] & active, 0)
         self.assertNotEqual(parent_flags[0] & active, 0)
         self.assertNotEqual(parent_flags[1] & active, 0)
+
+    def test_xpbd_entry_grids_do_not_alias_on_cpu(self):
+        """Keep XPBD entry grid scratch separate during CPU stepping."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        for x in (0.0, 0.03):
+            builder.add_particle(
+                pos=(x, 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.025,
+            )
+        model = builder.finalize(device="cpu")
+        parent_grid = model.particle_grid
+        self.assertIsNotNone(parent_grid)
+        coupled = SolverCoupled(
+            model=model,
+            entries=[
+                SolverCoupled.Entry(name="left", solver=SolverXPBD, particles=[0]),
+                SolverCoupled.Entry(name="right", solver=SolverXPBD, particles=[1]),
+            ],
+        )
+        left = coupled.view("left").particle_grid
+        right = coupled.view("right").particle_grid
+        self.assertIsNot(left, right)
+        self.assertIsNot(left, parent_grid)
+        self.assertIsNot(right, parent_grid)
+        self.assertIs(model.particle_grid, parent_grid)
+
+        state_in, state_out = model.state(), model.state()
+        coupled.step(state_in, state_out, control=None, contacts=None, dt=1.0 / 60.0)
+        # Overlap is 0.025 + 0.025 - 0.03 = 0.020 m, but
+        # neither entry should solve a contact against the other entry.
+        np.testing.assert_allclose(
+            state_out.particle_q.numpy(), state_in.particle_q.numpy(), rtol=0.0, atol=1.0e-6
+        )
+
+    def test_standalone_semiimplicit_keeps_step_time_grid_optout_on_cpu(self):
+        """Honor post-construction particle-grid disabling for standalone solvers."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        for x in (0.0, 0.03):
+            builder.add_particle(
+                pos=(x, 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.025,
+            )
+        model = builder.finalize(device="cpu")
+        grid = model.particle_grid
+        self.assertIsNotNone(grid)
+        solver = SolverSemiImplicit(model)
+        self.assertIs(solver.model.particle_grid, grid)
+
+        model.particle_grid = None
+        state_in, state_out = model.state(), model.state()
+        solver.step(state_in, state_out, control=None, contacts=None, dt=1.0 / 60.0)
+        np.testing.assert_allclose(state_out.particle_qd.numpy(), 0.0, rtol=0.0, atol=1.0e-7)
 
     def test_proxy_destination_view_marks_proxy_flags(self):
         """Proxy destination views should expose proxy bodies through body_flags."""
