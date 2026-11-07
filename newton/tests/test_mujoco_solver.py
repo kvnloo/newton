@@ -2831,8 +2831,8 @@ class TestMuJoCoSolverKinematicBodyProperties(unittest.TestCase):
     def test_world_attached_root_multi_world_placement(self):
         """Replicated world-attached roots must sit at each world's own root transform."""
         world_count = 3
-        for root_joint_kind in ("fixed", "locked_d6"):
-            with self.subTest(root_joint_kind=root_joint_kind):
+        for root_joint_kind, use_mujoco_cpu in itertools.product(("fixed", "locked_d6"), (False, True)):
+            with self.subTest(root_joint_kind=root_joint_kind, use_mujoco_cpu=use_mujoco_cpu):
                 template = newton.ModelBuilder()
                 root = template.add_link(
                     mass=1.0,
@@ -2858,19 +2858,32 @@ class TestMuJoCoSolverKinematicBodyProperties(unittest.TestCase):
                 builder = newton.ModelBuilder()
                 builder.replicate(template, world_count, spacing=(2.0, 0.0, 0.0))
                 model = builder.finalize(requires_grad=False)
-                solver = SolverMuJoCo(model, iterations=1, disable_contacts=True)
+                solver = SolverMuJoCo(model, iterations=1, disable_contacts=True, use_mujoco_cpu=use_mujoco_cpu)
 
                 self.assertEqual(solver.mj_model.nmocap, 1, "World-attached root should be exported as mocap")
 
-                # Refresh derived poses from the per-world root placement.
-                solver._mujoco_warp.kinematics(solver.mjw_model, solver.mjw_data)
+                # Frame notifications must retain independent mocap placement, too.
+                frames = model.joint_X_p.numpy()
+                roots = np.flatnonzero(model.joint_parent.numpy() < 0)
+                frames[roots, 1] += np.arange(world_count) * 0.25
+                model.joint_X_p.assign(frames)
+                solver.notify_model_changed(ModelFlags.JOINT_PROPERTIES)
+                if use_mujoco_cpu:
+                    for data in solver.mj_data_by_world:
+                        solver._mujoco.mj_kinematics(solver.mj_model, data)
+                else:
+                    solver._mujoco_warp.kinematics(solver.mjw_model, solver.mjw_data)
 
                 joint_parent = model.joint_parent.numpy()
                 joint_world = model.joint_world.numpy()
                 joint_child = model.joint_child.numpy()
                 joint_X_p = model.joint_X_p.numpy()
                 mjc_body_to_newton = solver.mjc_body_to_newton.numpy()
-                xpos = solver.mjw_data.xpos.numpy()
+                xpos = (
+                    np.stack([data.xpos for data in solver.mj_data_by_world])
+                    if use_mujoco_cpu
+                    else solver.mjw_data.xpos.numpy()
+                )
 
                 root_joints = np.where(joint_parent == -1)[0]
                 self.assertEqual(len(root_joints), world_count)
@@ -4709,6 +4722,30 @@ class TestMuJoCoSolverFixedTendonProperties(unittest.TestCase):
 
 
 class TestMuJoCoSolverNewtonContacts(unittest.TestCase):
+    def test_zero_capacity_contacts_clear_collision_counts(self):
+        """Clear collision counts when converting empty contact storage."""
+        model = self._build_grounded_spheres(1)
+        try:
+            solver = SolverMuJoCo(model, use_mujoco_contacts=False)
+        except ImportError as e:
+            self.skipTest(f"MuJoCo or deps not installed. Skipping test: {e}")
+        state = model.state()
+        pipeline = newton.CollisionPipeline(model)
+        contacts = pipeline.contacts()
+        pipeline.collide(state, contacts)
+        solver._convert_contacts_to_mjwarp(model, state, contacts)
+        self.assertGreater(int(solver.mjw_data.nacon.numpy()[0]), 0)
+
+        empty = newton.Contacts(0, 0, device=model.device)
+        for _ in range(2):
+            solver.mjw_data.ncollision.fill_(7)
+            solver._convert_contacts_to_mjwarp(model, state, empty)
+            self.assertEqual(int(solver.mjw_data.nacon.numpy()[0]), 0)
+            self.assertEqual(int(solver.mjw_data.ncollision.numpy()[0]), 0)
+
+        solver._convert_contacts_to_mjwarp(model, state, contacts)
+        self.assertEqual(int(solver.mjw_data.nacon.numpy()[0]), int(contacts.rigid_contact_count.numpy()[0]))
+
     @staticmethod
     def _build_grounded_spheres(sphere_count):
         """Build a single-world model with separated spheres touching the ground."""
@@ -8497,17 +8534,27 @@ class TestMuJoCoOptions(unittest.TestCase):
         self.assertGreater(np.abs(state_out.joint_qd.numpy()).max(), 0.0)
         np.testing.assert_allclose(observables.qfrc_actuator.numpy(), solver.mj_data.qfrc_actuator, atol=1e-6)
 
-        solver = SolverMuJoCo(model, use_mujoco_cpu=True, use_mujoco_contacts=False)
-        self.assertNotIn(solver.ObservableKind.CONTACT_F, solver.supported_observables)
-        with self.assertRaisesRegex(ValueError, "does not support"):
-            solver.observables({solver.ObservableKind.CONTACT_F}, contacts=contacts)
-        with self.assertRaisesRegex(NotImplementedError, "requires use_mujoco_contacts=True"):
-            solver.update_contacts(contacts)
+        with self.assertRaisesRegex(ValueError, "use_mujoco_cpu=True requires use_mujoco_contacts=True"):
+            SolverMuJoCo(model, use_mujoco_cpu=True, use_mujoco_contacts=False)
+
+        for flag_contact, disable_contacts in ((True, True), (False, None)):
+            with self.subTest(flag_contact=flag_contact, disable_contacts=disable_contacts):
+                model.mujoco.flag_contact.fill_(flag_contact)
+                solver = SolverMuJoCo(
+                    model,
+                    use_mujoco_cpu=True,
+                    use_mujoco_contacts=False,
+                    disable_contacts=disable_contacts,
+                )
+                self.assertTrue(solver.mj_model.opt.disableflags & solver._mujoco.mjtDisableBit.mjDSBL_CONTACT)
+
+        with self.assertRaisesRegex(ValueError, "use_mujoco_cpu=True requires use_mujoco_contacts=True"):
+            SolverMuJoCo(model, use_mujoco_cpu=True, use_mujoco_contacts=False, disable_contacts=False)
 
         model = self._create_multiworld_model(world_count=2)
         solver = SolverMuJoCo(model, use_mujoco_cpu=True, separate_worlds=True, nconmax=64)
         self.assertEqual(solver.mjw_data.naconmax, 128)
-        self.assertEqual(solver.get_max_contact_count(), 64)
+        self.assertEqual(solver.get_max_contact_count(), 128)
 
     def test_qfrc_constraint_load_observables(self):
         """Friction-loss forces are split out of the constraint forces of a horizontal arm.
@@ -11965,14 +12012,15 @@ class TestActuatorDampratioMultiWorldRuntime(unittest.TestCase):
                 bodies_per_world = model.body_count // model.world_count
                 masses = model.body_mass.numpy()
                 inertias = model.body_inertia.numpy()
-                masses[bodies_per_world:] *= 2.0
-                inertias[bodies_per_world:] *= 2.0
+                if not use_mujoco_cpu:
+                    masses[bodies_per_world:] *= 2.0
+                    inertias[bodies_per_world:] *= 2.0
                 model.body_mass.assign(masses)
                 model.body_inertia.assign(inertias)
                 solver = SolverMuJoCo(model, use_mujoco_cpu=use_mujoco_cpu, separate_worlds=True)
 
                 def damping(solver=solver, use_mujoco_cpu=use_mujoco_cpu):
-                    # Native CPU MuJoCo only simulates the template world.
+                    # CPU worlds share the native actuator parameter row.
                     if use_mujoco_cpu:
                         return -solver.mj_model.actuator_biasprm[None, 0, 2]
                     return -solver.mjw_model.actuator_biasprm.numpy()[:, 0, 2]
@@ -15110,6 +15158,33 @@ class TestMuJoCoPerWorldMeshContacts(unittest.TestCase):
                     worlds, dist = self._step_once(model, solver, native)
                     np.testing.assert_array_equal(worlds[dist < 0.0], 1)
                     np.testing.assert_allclose(dist[worlds == 1].min(), -0.05, atol=1.0e-3)
+
+    def test_cone_size_drives_contacts(self):
+        """Collide each world with a cone mesh tessellated from its own radius and half-height."""
+        for native in (False, True):
+            with self.subTest(native=native):
+                builder = newton.ModelBuilder()
+                builder.add_ground_plane()
+                # Only world 1's longer cone reaches 0.05 below the ground at this height.
+                for half_height in (0.1, 0.2):
+                    world = newton.ModelBuilder()
+                    body = world.add_link(
+                        xform=wp.transform(wp.vec3(0.0, 0.0, 0.15), wp.quat_identity()),
+                        mass=1.0,
+                        inertia=wp.mat33(np.eye(3) * 0.01),
+                    )
+                    joint = world.add_joint_free(child=body)
+                    world.add_articulation([joint])
+                    world.add_shape_cone(
+                        body, radius=0.1, half_height=half_height, cfg=newton.ModelBuilder.ShapeConfig(density=0.0)
+                    )
+                    builder.add_world(world)
+                model = builder.finalize()
+                solver = SolverMuJoCo(model, use_mujoco_contacts=native, nconmax=32, njmax=64)
+                self.assertEqual(solver.mjw_model.nmesh, 2)
+                worlds, dist = self._step_once(model, solver, native)
+                np.testing.assert_array_equal(worlds[dist < 0.0], 1)
+                np.testing.assert_allclose(dist[worlds == 1].min(), -0.05, atol=1.0e-3)
 
     def test_mesh_scale_change_with_newton_contacts(self):
         """Allow mesh resizing when Newton generates contacts."""

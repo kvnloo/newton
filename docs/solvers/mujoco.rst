@@ -140,10 +140,14 @@ An explicit ``rest_q=0.0`` also takes precedence over that default; use
 ``rest_q=None`` to leave it unspecified. Conflicting explicitly configured
 core rest coordinates and authored legacy rest values raise an error.
 
-Runtime ``model.mujoco.dof_springref`` is removed in Newton 1.8 without a
-deprecation period. It cannot directly alias :attr:`~newton.Model.joint_rest_q`:
-the reference changes from absolute MuJoCo coordinates in DOF layout to
-relative Newton coordinates in coordinate layout. Reads, assignments, and
+Runtime ``model.mujoco.dof_springref`` is deprecated since Newton 1.8. When the
+model has no joints with more coordinates than DOFs (free, ball, distance, or
+rod) and no nonzero ``mujoco:dof_ref`` at finalization, the DOF and coordinate
+layouts coincide and ``springref`` equals ``rest_q``, so the old name remains a
+warning alias to :attr:`~newton.Model.joint_rest_q` for at least one minor
+release. The alias
+tracks ``rest_q``, so it no longer reports the absolute spring reference if
+``dof_ref`` is edited later. For other models, reads, assignments, and
 deletions raise an ``AttributeError`` with migration guidance. Replace runtime
 accesses with ``joint_rest_q``, subtract ``ref`` from legacy values, and index
 by :attr:`~newton.Model.joint_q_start`.
@@ -409,12 +413,11 @@ the mode from user code.
 
 .. note::
 
-   ``use_mujoco_contacts=True`` and the MuJoCo CPU backend do not
-   apply the per-contact two-body factor — MuJoCo's internal
-   ``contact_params`` averages per-geom ``solref``, which cannot
-   reproduce the inverse-mass sum. ``SOLREF_MODE_FORCE_SPACE`` shapes
-   fall back to the legacy ``convert_solref(ke, kd, 1, 1)``
-   approximation on those paths.
+   ``use_mujoco_contacts=True`` does not apply the per-contact two-body
+   factor — MuJoCo's internal ``contact_params`` averages per-geom
+   ``solref``, which cannot reproduce the inverse-mass sum.
+   ``SOLREF_MODE_FORCE_SPACE`` shapes fall back to the legacy
+   ``convert_solref(ke, kd, 1, 1)`` approximation on that path.
 
 For parameter interpretation, stability tradeoffs, and task-oriented guidance,
 see :ref:`Tuning MuJoCo`.
@@ -425,9 +428,8 @@ Contact friction ``solreffriction`` mapping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For :class:`~newton.solvers.SolverMuJoCo`, ``kf`` maps to MuJoCo's per-contact
-``solreffriction`` when the MuJoCo Warp backend uses elliptic friction cones
-(``use_mujoco_cpu=False``, ``cone="elliptic"``) with Newton contacts
-(``use_mujoco_contacts=False``). It targets the force-space friction slope
+``solreffriction`` with elliptic friction cones (``cone="elliptic"``) and Newton
+contacts (``use_mujoco_contacts=False``). It targets the force-space friction slope
 ``f = -kf * v`` below the Coulomb limit. The mapping is exact when the sum of
 MuJoCo's translational ``body_invweight0`` values matches the contact's inverse
 effective mass (the relevant diagonal of :math:`J M^{-1} J^T`) and the contact
@@ -889,11 +891,50 @@ Multi-world support
 -------------------
 
 Constructing :class:`~newton.solvers.SolverMuJoCo` with
-``separate_worlds=True`` (the default for GPU mode with multiple
-worlds) builds a shared MuJoCo topology across worlds via ``mujoco_warp``.
+``separate_worlds=True`` (the default for any multi-world model) builds
+a MuJoCo model from the **first world** only. The GPU backend replicates
+it through ``mujoco_warp``. The CPU backend shares that model across one
+independent ``MjData`` per Newton world and steps all of them synchronously.
+The CPU backend shares native model parameters. Corresponding worlds must have
+identical body inertia and gravity compensation, joint axes and local frames,
+joint force parameters and scalar references, geom materials and sizes, equality
+parameters (including polynomial and mimic coefficients), explicit contact-pair
+parameters, and actuator and tendon parameters. Construction and model-change notifications reject differences before
+publishing updates, including notifications that combine several flags.
+Solver options must also match, unless a constructor argument overrides them
+for every world. CONNECT and inferred WELD constraints, including loop joints,
+require matching body-local reference geometry. Translating both body endpoints
+together preserves this geometry; translating a body relative to the shared world
+endpoint does not. An explicit WELD target can still be shared by worlds with
+different initial poses. Changing an equality type, an actuator's effective
+transmission target, articulation membership, or an explicit contact pair's
+targets or parameters requires recreating the multi-world CPU solver, even when
+every world requests the same change. This includes global contact pairs.
+Equivalent actuator target encodings remain accepted.
+Standalone nonkinematic fixed roots compile as static bodies; their joint frames
+must match across worlds and cannot change after construction. Fixed roots
+compiled as mocap bodies retain independent, updatable poses.
+Joint frames and axes that define compiled geometry also require rebuilding,
+including world-attached FIXED loop joints. Frames and motion axes consumed by
+FREE or mocap state conversion, and CONNECT-loop anchor updates, remain runtime
+inputs. Exported geom and site sizes and local transforms, and geom margins
+and gaps, require rebuilding.
+This includes shared global shapes; unexported visual geometry is unaffected.
+Ordinary geom contact materials remain updatable through
+:attr:`~newton.ModelFlags.SHAPE_PROPERTIES`.
+Joint state, controls, applied forces, gravity, equality activation, and free or
+mocap root poses remain independent. A scalar ``dof_ref`` is a model reference,
+not an independent runtime pose; it must match across CPU worlds.
+CPU actuator and tendon rows must have matching contiguous world-local layouts;
+global actuator and tendon rows are unsupported. Equality, actuator, tendon-path,
+and explicit contact-pair references must identify corresponding local entities
+or the same global shapes. Heightfield source dimensions and elevation data must
+also match. Reference geometry is compared after removing common world
+translations. These CPU restrictions do not remove the GPU backend's supported
+per-world parameter variation.
 Bodies, joints, equality constraints, mimic relationships, primitive geoms,
-and sites must have matching layouts. With ``use_mujoco_cpu=False``, mesh
-assets, scales, and convex-hull counts may differ across worlds. Collision
+and sites must have matching layouts. With ``use_mujoco_cpu=False``, mesh,
+heightfield, and cone assets, scales, and convex-hull counts may differ across worlds. Collision
 flags may also differ when Newton supplies contacts. Native MuJoCo contacts
 require matching collision flags, groups, and exclusions for corresponding geom
 slots. With native contacts,
@@ -901,6 +942,11 @@ per-world mesh scales are compiled into the MuJoCo assets, so changing their
 :attr:`~newton.Model.shape_scale` after construction raises ``ValueError``;
 recreate the solver to resize them. The solver validates
 compatibility at construction and raises ``ValueError`` on a mismatch.
+
+Calling :meth:`~newton.solvers.SolverMuJoCo.reset` with a world mask
+resets only the selected CPU or GPU runtime worlds. It does not change
+which worlds the next :meth:`~newton.solvers.SolverMuJoCo.step` advances;
+every step advances the complete batch.
 
 Bodies, joints, equality constraints, and mimic relationships cannot have
 a negative world index — assigning any of them to the global world
@@ -922,7 +968,8 @@ same three-phase cycle:
    frequency can be controlled via the deprecated
    ``update_data_interval`` kwarg; it will be removed and the joint state
    will then be synchronized on every step.
-2. **Integrate.** ``mujoco_warp`` steps the MuJoCo model forward by ``dt``.
+2. **Integrate.** The selected backend steps the MuJoCo model forward by ``dt``.
+   On CPU, each world's ``MjData`` is stepped once in world order.
 3. **Pull MuJoCo → Newton.** ``SolverMuJoCo._update_newton_state``
    populates the output ``State`` from the integrated MuJoCo data.
    Kinematic roots pass through unchanged from ``state_in`` (see
