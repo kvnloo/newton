@@ -7931,6 +7931,67 @@ class TestMuJoCoOptions(unittest.TestCase):
 
 
 class TestMuJoCoArticulationConversion(unittest.TestCase):
+    def test_standalone_free_root_cpu_reports_fall(self):
+        """CPU standalone root must expose the same free fall in joint and body state."""
+        builder = newton.ModelBuilder()
+        body = builder.add_link(
+            xform=wp.transform((0.0, 0.0, 2.0), wp.quat_identity()),
+            mass=1.0,
+            inertia=wp.mat33(np.eye(3)),
+        )
+        builder.add_joint_free(child=body)
+        model = builder.finalize(device="cpu")
+        with self.assertWarnsRegex(UserWarning, "standalone world roots"):
+            solver = SolverMuJoCo(model, use_mujoco_cpu=True, disable_contacts=True)
+
+        state_in, state_out = model.state(), model.state()
+        control = model.control()
+        dt = 0.005
+        for step in range(1, 101):
+            solver.step(state_in, state_out, control, None, dt)
+            state_in, state_out = state_out, state_in
+            if step in (10, 50, 100):
+                expected_z = 2.0 - 9.81 * dt * dt * step * (step + 1) / 2
+                expected_vz = -9.81 * dt * step
+                with self.subTest(step=step):
+                    self.assertAlmostEqual(
+                        float(state_in.joint_q.numpy()[2]), expected_z, delta=0.002
+                    )
+                    self.assertAlmostEqual(
+                        float(state_in.body_q.numpy()[body, 2]), expected_z, delta=0.002
+                    )
+                    self.assertAlmostEqual(
+                        float(state_in.body_qd.numpy()[body, 2]), expected_vz, delta=0.002
+                    )
+
+    def test_standalone_free_root_cpu_matches_articulated_root(self):
+        """A standalone and equivalent articulated free root must report equal body state."""
+        builder = newton.ModelBuilder()
+        for articulated in (False, True):
+            body = builder.add_link(
+                xform=wp.transform((0.0, 0.0, 2.0), wp.quat_identity()),
+                mass=1.0,
+                inertia=wp.mat33(np.eye(3)),
+            )
+            joint = builder.add_joint_free(child=body)
+            if articulated:
+                builder.add_articulation([joint])
+
+        model = builder.finalize(device="cpu")
+        with self.assertWarnsRegex(UserWarning, "standalone world roots"):
+            solver = SolverMuJoCo(model, use_mujoco_cpu=True, disable_contacts=True)
+
+        state_in, state_out = model.state(), model.state()
+        control = model.control()
+        for _ in range(10):
+            solver.step(state_in, state_out, control, None, 0.005)
+            state_in, state_out = state_out, state_in
+
+        body_q = state_in.body_q.numpy()
+        body_qd = state_in.body_qd.numpy()
+        np.testing.assert_allclose(body_q[0], body_q[1], rtol=0.0, atol=0.0002)
+        np.testing.assert_allclose(body_qd[0], body_qd[1], rtol=0.0, atol=0.0002)
+
     def test_orphan_world_roots_track_articulated_body_state(self):
         """Standalone roots report the same motion as equivalent articulated roots."""
         for use_mujoco_cpu in (True, False):
