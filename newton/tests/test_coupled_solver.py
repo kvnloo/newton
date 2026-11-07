@@ -1548,6 +1548,92 @@ class TestSolverCoupledBasic(unittest.TestCase):
                     np.testing.assert_allclose(coupled.view("other").particle_inv_mass.numpy(), [0.5] + [0.0] * 8)
                     self.assertEqual((view.particle_mass.ptr, view.particle_inv_mass.ptr), pointers)
 
+    def test_configured_particle_radius_and_disables_survive_notifications(self):
+        """Preserve configured radii and disabled flags across parent refreshes on CPU."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        for i in range(3):
+            builder.add_particle(
+                pos=(float(i), 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.05,
+            )
+        model = builder.finalize(device="cpu")
+
+        def configure(view):
+            view.particle_radius = wp.array([0.05, 0.125, 0.25], dtype=float, device=view.device)
+            view.disable_particles(wp.array([1], dtype=int, device=view.device))
+
+        coupled = SolverCoupled(
+            model,
+            entries=[
+                SolverCoupled.Entry(name="custom", solver=SolverXPBD, particles=[1, 2], configure_view=configure),
+                SolverCoupled.Entry(name="other", solver=SolverXPBD, particles=[0]),
+            ],
+        )
+        view = coupled.view("custom")
+        radius_ptr = view.particle_radius.ptr
+        model.particle_radius.assign([0.08, 0.09, 0.10])
+        model.gravity.assign([[0.0, 0.0, -1.0]])
+
+        for last_mass in (11.0, 13.0):
+            parent_masses = np.array([7.0, 9.0, last_mass], dtype=np.float32)
+            model.particle_mass.assign(parent_masses)
+            model.particle_inv_mass.assign(1.0 / parent_masses)
+            coupled.notify_model_changed(newton.ModelFlags.MODEL_PROPERTIES)
+
+            np.testing.assert_allclose(view.particle_radius.numpy(), [0.05, 0.125, 0.25], atol=1.0e-7)
+            np.testing.assert_allclose(view.particle_mass.numpy(), [0.0, 9.0, last_mass])
+            np.testing.assert_allclose(view.particle_inv_mass.numpy(), [0.0, 1.0 / 9.0, 1.0 / last_mass])
+            flags = view.particle_flags.numpy()
+            self.assertEqual(int(flags[1]) & int(ParticleFlags.ACTIVE), 0)
+            self.assertNotEqual(int(flags[2]) & int(ParticleFlags.ACTIVE), 0)
+            self.assertEqual(view.particle_radius.ptr, radius_ptr)
+            np.testing.assert_allclose(model.particle_radius.numpy(), [0.08, 0.09, 0.10], atol=1.0e-7)
+
+    def test_configured_mpm_friction_survives_material_refresh(self):
+        """Preserve a view-local namespaced particle material while refreshing inherited values."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        SolverImplicitMPM.register_custom_attributes(builder)
+        builder.begin_world()
+        for i in range(3):
+            builder.add_particle(
+                pos=(float(i), 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.05,
+            )
+        builder.end_world()
+        model = builder.finalize(device="cpu")
+        config = SolverImplicitMPM.Config(grid_type="fixed", grid_padding=1, max_iterations=1)
+
+        def configure(view):
+            view.mpm.friction = wp.array([0.1, 0.7, 0.8], dtype=float, device=view.device)
+
+        coupled = SolverCoupled(
+            model,
+            entries=[
+                SolverCoupled.Entry(name="other", solver=SolverXPBD, particles=[0]),
+                SolverCoupled.Entry(
+                    name="sand",
+                    solver=lambda view: SolverImplicitMPM(view, config),
+                    particles=[1, 2],
+                    configure_view=configure,
+                    in_place=True,
+                ),
+            ],
+        )
+        view = coupled.view("sand")
+        friction_ptr = view.mpm.friction.ptr
+        model.mpm.friction.assign([0.35, 0.4, 0.45])
+        model.mpm.young_modulus.assign([1200.0, 2100.0, 3100.0])
+        coupled.notify_model_changed(newton.ModelFlags.MODEL_PROPERTIES)
+
+        np.testing.assert_allclose(view.mpm.friction.numpy(), [0.1, 0.7, 0.8], atol=1.0e-6)
+        np.testing.assert_allclose(view.mpm.young_modulus.numpy(), [1200.0, 2100.0, 3100.0])
+        np.testing.assert_allclose(model.mpm.friction.numpy(), [0.35, 0.4, 0.45], atol=1.0e-6)
+        self.assertEqual(view.mpm.friction.ptr, friction_ptr)
+
     def test_configure_view_applies_after_compaction(self):
         builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
         cloth_body = builder.add_body(mass=1.0, inertia=wp.mat33(np.eye(3)))

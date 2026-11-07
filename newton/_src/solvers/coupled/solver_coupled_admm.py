@@ -1827,6 +1827,7 @@ class SolverCoupledADMM(SolverCoupled):
                     entry.view.disable_body_dynamics(entry.body_dynamics_disabled_local_indices)
             if buf.particle_proximal_mass is not None:
                 entry.view._refresh_particle_mass_properties(entry.particle_local_to_global)
+                entry.view._restore_configured_particle_masses()
                 if entry.particle_dynamics_disabled_local_indices.shape[0] > 0:
                     entry.view.zero_particle_mass(entry.particle_dynamics_disabled_local_indices)
                 entry.view.add_particle_lumped_mass(buf.particle_proximal_mass)

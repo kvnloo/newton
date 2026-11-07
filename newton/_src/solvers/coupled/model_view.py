@@ -50,6 +50,7 @@ class _AttributeNamespaceView(Model.AttributeNamespace):
     def __init__(self, parent: Model.AttributeNamespace, view: ModelView) -> None:
         super().__init__(object.__getattribute__(parent, "_name"))
         object.__setattr__(self, "_parent_namespace", parent)
+        object.__setattr__(self, "_view", view)
         self._removed_attributes.update(parent._removed_attributes)
         for name, (getter, message) in parent._deprecated_aliases.items():
             spec = view.parent._attribute_spec(f"{self._name}:{name}")
@@ -67,6 +68,15 @@ class _AttributeNamespaceView(Model.AttributeNamespace):
             return super().__getattr__(name)
         except AttributeError:
             return getattr(object.__getattribute__(self, "_parent_namespace"), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        super().__setattr__(name, value)
+        view = self.__dict__.get("_view")
+        if view is not None and view._recording_particle_masses:
+            full_name = f"{self._name}:{name}"
+            spec = view.parent._attribute_spec(full_name)
+            if spec is not None and spec.frequency == view.parent.AttributeFrequency.PARTICLE:
+                view._configured_particle_attributes.add(full_name)
 
 
 class ModelView:
@@ -100,6 +110,8 @@ class ModelView:
         object.__setattr__(self, "_recording_particle_masses", False)
         object.__setattr__(self, "_configured_particle_mass_mask", None)
         object.__setattr__(self, "_configured_particle_masses", None)
+        object.__setattr__(self, "_configured_particle_attributes", set())
+        object.__setattr__(self, "_configured_disabled_particle_indices", [])
 
     # ------------------------------------------------------------------
     # Attribute delegation
@@ -162,6 +174,12 @@ class ModelView:
             object.__getattribute__(self, "_cache").clear()
         if name in {"particle_mass", "particle_inv_mass"}:
             self._record_particle_mass_override()
+        elif (
+            self._recording_particle_masses
+            and spec is not None
+            and spec.frequency == parent.AttributeFrequency.PARTICLE
+        ):
+            self._configured_particle_attributes.add(name)
         object.__getattribute__(self, "_overrides")[name] = value
 
     def __delattr__(self, name: str) -> None:
@@ -457,6 +475,11 @@ class ModelView:
             ],
             device=self.device,
         )
+
+    def _restore_configured_particle_disables(self) -> None:
+        """Reapply per-entry disable operations after parent flag projection."""
+        for indices in self._configured_disabled_particle_indices:
+            self.disable_particles(indices)
 
     def _cow_array(self, name: str) -> wp.array[Any]:
         """Return a view-local mutable copy of a parent model array.
@@ -769,6 +792,8 @@ class ModelView:
         if parent.particle_count == 0 or particle_indices.shape[0] == 0:
             return
 
+        if self._recording_particle_masses:
+            self._configured_disabled_particle_indices.append(wp.clone(particle_indices))
         particle_flags = self._cow_array("particle_flags")
         wp.launch(
             _clear_particle_flag_kernel,

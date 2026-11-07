@@ -504,7 +504,9 @@ class SolverCoupled(SolverBase, CouplingInterface):
             configure_view: Optional callback invoked after compaction for
                 entry-local view overrides. Particle masses authored with the view's
                 mass mutators or array assignment persist across model notifications;
-                other particle masses continue to inherit parent updates. Direct
+                other particle masses continue to inherit parent updates.
+                Explicit particle attribute assignments and disable_particles calls
+                also persist; unmodified attributes inherit parent updates. Direct
                 writes through returned Warp arrays are not tracked.
             substeps: Number of substeps to run per coupled step.
             in_place: Whether the sub-solver may step in-place.
@@ -3840,7 +3842,9 @@ class SolverCoupled(SolverBase, CouplingInterface):
             self._project_compact_attributes(
                 entry.view,
                 entry.attribute_projections,
-                exclude=set(),
+                exclude=(
+                    entry.view._configured_particle_attributes if flags & int(ModelFlags.MODEL_PROPERTIES) else set()
+                ),
                 include=lambda attribute: self._attribute_matches_model_flags(attribute, flags),
                 source_model=True,
                 update_existing=True,
@@ -3857,6 +3861,7 @@ class SolverCoupled(SolverBase, CouplingInterface):
                     entry.view.zero_particle_mass(entry.particle_dynamics_disabled_local_indices)
                     entry.view.disable_particles(entry.particle_dynamics_disabled_local_indices)
                 entry.view.mark_proxy_particles(entry.proxy_particle_local_indices)
+                entry.view._restore_configured_particle_disables()
             if flags & int(
                 ModelFlags.JOINT_PROPERTIES | ModelFlags.JOINT_DOF_PROPERTIES | ModelFlags.JOINT_DOF_FORCE_PROPERTIES
             ):
