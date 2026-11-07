@@ -2325,6 +2325,134 @@ devices = get_test_devices()
 
 
 class TestCollision(unittest.TestCase):
+    def test_cpu_csr_empty_rows_and_capacity(self):
+        """Empty CSR rows keep zero offsets despite allocated pair capacity."""
+        info = build_tri_mesh_collision_info(
+            particle_count=3,
+            tri_count=0,
+            edge_count=0,
+            vertex_collision_buffer_pre_alloc=2,
+            edge_collision_buffer_pre_alloc=2,
+            device="cpu",
+        )
+        self.assertEqual(info.vertex_colliding_triangles_offsets.numpy().tolist(), [0, 0, 0, 0])
+        self.assertEqual(info.vertex_colliding_triangles_count.numpy().tolist(), [0, 0, 0])
+        self.assertEqual(info.global_pair_counts.numpy().tolist(), [0, 0, 0, 0])
+        self.assertEqual(info.vertex_colliding_triangles.numpy().nbytes, 48)
+
+    def test_cpu_csr_ragged_rows_restore_and_sort(self):
+        """Linked-list rows restore forward order before optional sorting."""
+        pairs = wp.array(
+            np.array([[0, 3], [2, 7], [0, 9], [0, 5]], dtype=np.int32),
+            dtype=wp.vec2i,
+            device="cpu",
+        )
+        heads = wp.array([3, -1, 1], dtype=wp.int32, device="cpu")
+        links = wp.array([-1, -1, 0, 2], dtype=wp.int32, device="cpu")
+        offsets = wp.array([0, 3, 3, 4], dtype=wp.int32, device="cpu")
+        rows = wp.zeros(8, dtype=wp.int32, device="cpu")
+        wp.launch(
+            collision_kernels.fill_self_contact_rows_from_lists,
+            dim=3,
+            inputs=[pairs, heads, links, offsets, rows],
+            device="cpu",
+        )
+        self.assertEqual(rows.numpy().tolist(), [0, 3, 0, 9, 0, 5, 2, 7])
+        wp.launch(
+            collision_kernels.sort_self_contact_rows,
+            dim=3,
+            inputs=[offsets, rows],
+            device="cpu",
+        )
+        self.assertEqual(rows.numpy().tolist(), [0, 3, 0, 5, 0, 9, 2, 7])
+
+    def test_cpu_csr_reverse_rows_sort_vertex_indices(self):
+        """Triangle reverse rows carry vertex indices and sort per row."""
+        pairs = wp.array(
+            np.array([[5, 0], [2, 1], [3, 0]], dtype=np.int32),
+            dtype=wp.vec2i,
+            device="cpu",
+        )
+        heads = wp.array([2, 1], dtype=wp.int32, device="cpu")
+        links = wp.array([-1, -1, 0], dtype=wp.int32, device="cpu")
+        offsets = wp.array([0, 2, 3], dtype=wp.int32, device="cpu")
+        rows = wp.zeros(3, dtype=wp.int32, device="cpu")
+        wp.launch(
+            collision_kernels.fill_self_contact_reverse_rows_from_lists,
+            dim=2,
+            inputs=[pairs, heads, links, offsets, rows],
+            device="cpu",
+        )
+        self.assertEqual(rows.numpy().tolist(), [5, 3, 2])
+        wp.launch(
+            collision_kernels.sort_self_contact_reverse_rows,
+            dim=2,
+            inputs=[offsets, rows],
+            device="cpu",
+        )
+        self.assertEqual(rows.numpy().tolist(), [3, 5, 2])
+
+    def test_cpu_csr_allocated_backing_bytes_by_demand(self):
+        """Measure live CPU result-array bytes for zero, sparse and dense rows.
+
+        This measures actual Warp array backing lengths, not allocator padding,
+        process RSS, or the detector's transient linked-list scratch.
+        """
+        scenarios = (
+            ("zero", [], [-1, -1, -1], [], [0, 0, 0, 0]),
+            ("sparse", [[0, 3], [2, 7], [0, 9], [0, 5]], [3, -1, 1], [-1, -1, 0, 2], [0, 3, 3, 4]),
+            (
+                "dense",
+                [[0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6]],
+                [5, -1, -1],
+                [-1, 0, 1, 2, 3, 4],
+                [0, 6, 6, 6],
+            ),
+        )
+        observed = {}
+        for name, pair_values, head_values, link_values, offset_values in scenarios:
+            info = build_tri_mesh_collision_info(
+                particle_count=3,
+                tri_count=0,
+                edge_count=0,
+                vertex_collision_buffer_pre_alloc=2,
+                edge_collision_buffer_pre_alloc=2,
+                device="cpu",
+            )
+            if pair_values:
+                pairs = wp.array(np.array(pair_values, dtype=np.int32), dtype=wp.vec2i, device="cpu")
+                heads = wp.array(head_values, dtype=wp.int32, device="cpu")
+                links = wp.array(link_values, dtype=wp.int32, device="cpu")
+                offsets = wp.array(offset_values, dtype=wp.int32, device="cpu")
+                wp.launch(
+                    collision_kernels.fill_self_contact_rows_from_lists,
+                    dim=3,
+                    inputs=[pairs, heads, links, offsets, info.vertex_colliding_triangles],
+                    device="cpu",
+                )
+            filled_pairs = info.vertex_colliding_triangles.numpy()[: 2 * offset_values[-1]].reshape(-1, 2)
+            self.assertEqual(sorted(map(tuple, filled_pairs)), sorted(map(tuple, pair_values)))
+            vertex_bytes = info.vertex_colliding_triangles.numpy().nbytes
+            result_bytes = sum(
+                array.numpy().nbytes
+                for array in (
+                    info.global_pair_counts,
+                    info.vertex_colliding_triangles,
+                    info.vertex_colliding_triangles_offsets,
+                    info.vertex_colliding_triangles_count,
+                    info.vertex_colliding_triangles_min_dist,
+                    info.triangle_colliding_vertices_min_dist,
+                    info.edge_colliding_edges,
+                    info.edge_colliding_edges_offsets,
+                    info.edge_colliding_edges_count,
+                    info.edge_colliding_edges_min_dist,
+                )
+            )
+            observed[name] = (offset_values[-1], vertex_bytes, result_bytes)
+
+        self.assertEqual(observed, {"zero": (0, 48, 112), "sparse": (4, 48, 112), "dense": (6, 48, 112)})
+        print("CPU CSR result-array backing bytes (stored pairs, vertex bytes, all result bytes):", observed)
+
     def test_self_contact_record_bounds(self):
         """The record bounds count the atomic call sites of one visit times the visits per thread."""
         # one visit per family: the call sites of one visit (8 truncation minima, 2 + 4 harvest adds)
