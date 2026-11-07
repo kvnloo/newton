@@ -5115,6 +5115,9 @@ class ModelBuilder:
         """
         Parses MuJoCo XML (MJCF) file and adds the bodies and joints to the given ModelBuilder.
         MuJoCo-specific custom attributes are registered on the builder automatically.
+        Authored ``mocap="true"`` bodies become kinematic world-fixed roots.
+        They must be jointless children of the world, and their root joints
+        are preserved when ``collapse_fixed_joints=True``.
         Importing ``<dcmotor>`` actuators requires the optional ``mujoco`` package
         (included in ``newton[sim]``) to resolve native defaults, and raises
         :class:`ImportError` if it is unavailable. Other MJCF import remains independent of MuJoCo.
@@ -8021,7 +8024,9 @@ class ModelBuilder:
                         child_lbl,
                     )
                 # Warn if the child_body of skipped joint has zero or negative mass
-                if body_data[child_body]["mass"] <= 0:
+                if body_data[child_body]["mass"] <= 0 and not (
+                    body_data[child_body]["flags"] & int(BodyFlags.KINEMATIC)
+                ):
                     warnings.warn(
                         f"Skipped joint {joint['label']} has a child {child_lbl} with zero or negative mass ({body_data[child_body]['mass']}). "
                         f"This may cause unexpected behavior.",

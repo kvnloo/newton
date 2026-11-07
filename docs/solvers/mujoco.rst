@@ -1290,6 +1290,29 @@ for a fixed-root articulation after constructing the solver, call
 :attr:`~newton.ModelFlags.JOINT_PROPERTIES` flag to
 synchronize the updated fixed-root poses into MuJoCo.
 
+MJCF mocap bodies
+^^^^^^^^^^^^^^^^^
+
+:meth:`~newton.ModelBuilder.add_mjcf` imports ``mocap="true"`` bodies as
+kinematic world-fixed roots. Their labels and authored poses survive import
+and ``collapse_fixed_joints=True``; ordinary fixed bodies still collapse.
+
+Mocap roots must be jointless world children. Importing them with an explicit
+non-world parent, ``floating=True``, or a ``base_joint`` override raises
+``ValueError``. Dynamic descendants retain their existing semantics.
+
+To move an imported target using :class:`~newton.solvers.SolverMuJoCo`, find
+the root joint with ``joint_child`` equal to the target body index. For desired
+world transform ``X_target``, set its parent anchor to
+``X_target * joint_X_c`` and call
+``notify_model_changed(ModelFlags.JOINT_PROPERTIES)`` before stepping.
+MuJoCo Warp and the native CPU backend both use this path. Writing
+``State.body_q`` alone does not update the target.
+
+To collapse fixed joints separately, pass the mocap root joint indices
+through ``joints_to_keep`` to preserve externally movable targets.
+
+
 Kinematic welds
 ~~~~~~~~~~~~~~~
 

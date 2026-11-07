@@ -60,6 +60,39 @@ MASSLESS_FIXED_ROOT_WITH_INTERNAL_FIXED_MJCF = """
 """
 
 
+class TestMocapReviewCPU(unittest.TestCase):
+    def test_mocap_keeps_authored_positions_and_kinematic_flag(self):
+        """Keep MJCF world-root mocap poses and kinematic semantics."""
+        for xyz in ((1.0, 2.0, 3.0), (-1.0, 0.5, 2.0)):
+            with self.subTest(xyz=xyz):
+                pos = " ".join(str(v) for v in xyz)
+                xml = (
+                    f'<mujoco><worldbody><body name="target" mocap="true" pos="{pos}">'
+                    '<geom type="sphere" size="0.1"/></body></worldbody></mujoco>'
+                )
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(xml)
+                target = builder.body_label.index("worldbody/target")
+                self.assertEqual(builder.body_flags[target], int(newton.BodyFlags.KINEMATIC))
+                np.testing.assert_allclose(builder.body_q[target].p, xyz, rtol=0, atol=1.0e-6)
+
+    def test_mocap_survives_fixed_joint_collapse(self):
+        """Keep mocap targets while collapsing ordinary world-fixed bodies."""
+        xml = (
+            '<mujoco><worldbody>'
+            '<body name="target" mocap="true" pos="-1 0.5 2">'
+            '<geom type="sphere" size="0.1"/></body>'
+            '<body name="fixed"><geom type="sphere" size="0.1"/></body>'
+            '</worldbody></mujoco>'
+        )
+        builder = newton.ModelBuilder()
+        builder.add_mjcf(xml, collapse_fixed_joints=True)
+        self.assertEqual(builder.body_count, 1)
+        self.assertEqual(builder.body_label, ["worldbody/target"])
+        self.assertEqual(builder.body_flags, [int(newton.BodyFlags.KINEMATIC)])
+        np.testing.assert_allclose(builder.body_q[0].p, [-1.0, 0.5, 2.0], rtol=0, atol=1.0e-6)
+
+
 class TestImportMjcfBasic(unittest.TestCase):
     def test_nested_option_flags_match_native_mujoco(self):
         """Preserve later flag overrides and apply gravity to the Newton model."""
