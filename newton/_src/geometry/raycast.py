@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import warp as wp
 
 from ..core import MAXVAL
+from .bvh import BVH_SHAPE_INACTIVE
 from .types import GeoType
 
 if TYPE_CHECKING:
@@ -379,7 +380,9 @@ def ray_intersect_capsule(ray_origin: wp.vec3, ray_direction: wp.vec3, r: float,
 
 
 @wp.func
-def ray_intersect_cylinder(ray_origin: wp.vec3, ray_direction: wp.vec3, r: float, h: float) -> tuple[float, wp.vec3]:
+def ray_intersect_cylinder(
+    ray_origin: wp.vec3, ray_direction: wp.vec3, r: float, h: float, barrel_radius: float = 0.0
+) -> tuple[float, wp.vec3]:
     """Computes ray-cylinder intersection in the cylinder's local frame.
 
     The cylinder is centered at the local origin with its axis along local Z.
@@ -389,6 +392,9 @@ def ray_intersect_cylinder(ray_origin: wp.vec3, ray_direction: wp.vec3, r: float
         ray_direction: The direction of the ray in the cylinder's local frame.
         r: The radius of the cylinder.
         h: The half-height of the cylinder.
+        barrel_radius: Radius of the circular side profile. Zero creates straight sides. Ray casting
+            approximates a nonzero circular profile with a truncated ellipsoid that matches its end
+            and equatorial radii.
 
     Returns:
         The distance and local-space normal of the intersection point along the ray, or -1.0 and a zero vector if there is no intersection.
@@ -396,27 +402,62 @@ def ray_intersect_cylinder(ray_origin: wp.vec3, ray_direction: wp.vec3, r: float
     t_hit = -1.0
     normal = wp.vec3(0.0)
     min_t = 1.0e10
+    axial_scale = 0.0
+    equatorial_radius = r
 
-    # Intersection with cylinder body
-    a_cyl = ray_direction[0] * ray_direction[0] + ray_direction[1] * ray_direction[1]
-    if a_cyl > MINVAL:
-        b_cyl = 2.0 * (ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1])
-        c_cyl = ray_origin[0] * ray_origin[0] + ray_origin[1] * ray_origin[1] - r * r
-        delta_cyl = b_cyl * b_cyl - 4.0 * a_cyl * c_cyl
-        if delta_cyl >= 0.0:
-            sqrt_delta_cyl = wp.sqrt(delta_cyl)
-            inv_2a = 1.0 / (2.0 * a_cyl)
-            t1 = (-b_cyl - sqrt_delta_cyl) * inv_2a
-            if t1 >= 0.0:
-                z = ray_origin[2] + t1 * ray_direction[2]
-                if wp.abs(z) <= h:
-                    min_t = wp.min(min_t, t1)
+    if barrel_radius > 0.0 and h > MINVAL:
+        equatorial_radius = r + barrel_radius - wp.sqrt(barrel_radius * barrel_radius - h * h)
+        axial_scale = (equatorial_radius * equatorial_radius - r * r) / (h * h)
 
-            t2 = (-b_cyl + sqrt_delta_cyl) * inv_2a
-            if t2 >= 0.0:
-                z = ray_origin[2] + t2 * ray_direction[2]
-                if wp.abs(z) <= h:
-                    min_t = wp.min(min_t, t2)
+    # A straight cylinder is the axial_scale=0 case. For barrel cylinders this
+    # is a truncated ellipsoid matching the circular profile at its ends and equator.
+    a_side = (
+        ray_direction[0] * ray_direction[0]
+        + ray_direction[1] * ray_direction[1]
+        + axial_scale * ray_direction[2] * ray_direction[2]
+    )
+    if a_side > MINVAL:
+        b_side = 2.0 * (
+            ray_origin[0] * ray_direction[0]
+            + ray_origin[1] * ray_direction[1]
+            + axial_scale * ray_origin[2] * ray_direction[2]
+        )
+        c_side = (
+            ray_origin[0] * ray_origin[0]
+            + ray_origin[1] * ray_origin[1]
+            + axial_scale * ray_origin[2] * ray_origin[2]
+            - equatorial_radius * equatorial_radius
+        )
+        delta_side = b_side * b_side - 4.0 * a_side * c_side
+        if delta_side >= 0.0:
+            sqrt_delta_side = wp.sqrt(delta_side)
+            inv_2a_side = 1.0 / (2.0 * a_side)
+            t_side = (-b_side - sqrt_delta_side) * inv_2a_side
+            z_side = ray_origin[2] + t_side * ray_direction[2]
+            if t_side < 0.0 or wp.abs(z_side) > h:
+                t_side = (-b_side + sqrt_delta_side) * inv_2a_side
+                z_side = ray_origin[2] + t_side * ray_direction[2]
+            if t_side >= 0.0 and wp.abs(z_side) <= h:
+                min_t = t_side
+
+    # Refine the ellipsoid hit against the circular profile. One Newton step
+    # removes most of the approximation error without a quartic torus solver.
+    if barrel_radius > 0.0 and min_t < 1.0e10:
+        hit_side = ray_origin + min_t * ray_direction
+        radial_side = wp.sqrt(hit_side[0] * hit_side[0] + hit_side[1] * hit_side[1])
+        circle_sq = barrel_radius * barrel_radius - hit_side[2] * hit_side[2]
+        if radial_side > MINVAL and circle_sq > MINVAL:
+            circle_side = wp.sqrt(circle_sq)
+            end_radial_offset = wp.sqrt(barrel_radius * barrel_radius - h * h)
+            residual = radial_side - r - circle_side + end_radial_offset
+            radial_derivative = (hit_side[0] * ray_direction[0] + hit_side[1] * ray_direction[1]) / radial_side
+            axial_derivative = hit_side[2] * ray_direction[2] / circle_side
+            derivative = radial_derivative + axial_derivative
+            if wp.abs(derivative) > MINVAL:
+                refined_t = min_t - residual / derivative
+                refined_z = ray_origin[2] + refined_t * ray_direction[2]
+                if refined_t >= 0.0 and wp.abs(refined_z) <= h:
+                    min_t = refined_t
 
     # Intersection with caps
     if wp.abs(ray_direction[2]) > MINVAL:
@@ -445,8 +486,16 @@ def ray_intersect_cylinder(ray_origin: wp.vec3, ray_direction: wp.vec3, r: float
         z_clamped = wp.min(h, wp.max(-h, hit_local[2]))
         if z_clamped >= (h - EPSILON) or z_clamped <= (-h + EPSILON):
             normal_local = wp.vec3(0.0, 0.0, z_clamped)
+        elif barrel_radius > 0.0:
+            radial_length = wp.sqrt(hit_local[0] * hit_local[0] + hit_local[1] * hit_local[1])
+            circle_height = wp.sqrt(barrel_radius * barrel_radius - hit_local[2] * hit_local[2])
+            normal_local = wp.vec3(
+                hit_local[0] / radial_length,
+                hit_local[1] / radial_length,
+                hit_local[2] / circle_height,
+            )
         else:
-            normal_local = wp.normalize(hit_local - wp.vec3(0.0, 0.0, z_clamped))
+            normal_local = wp.vec3(hit_local[0], hit_local[1], axial_scale * hit_local[2])
         normal = wp.normalize(normal_local)
 
     return t_hit, normal
@@ -737,7 +786,9 @@ def _make_ray_intersect_shape(compute_normal: bool):
         elif geomtype == GeoType.CAPSULE:
             t_hit, normal_local = ray_intersect_capsule(ray_origin_local, ray_direction_local, size[0], size[1])
         elif geomtype == GeoType.CYLINDER:
-            t_hit, normal_local = ray_intersect_cylinder(ray_origin_local, ray_direction_local, size[0], size[1])
+            t_hit, normal_local = ray_intersect_cylinder(
+                ray_origin_local, ray_direction_local, size[0], size[1], size[2]
+            )
         elif geomtype == GeoType.CONE:
             t_hit, normal_local = ray_intersect_cone(ray_origin_local, ray_direction_local, size[0], size[1])
         elif geomtype == GeoType.ELLIPSOID:
@@ -779,6 +830,9 @@ def raycast_kernel(
     shape_world: wp.array[int],
     world_offsets: wp.array[wp.vec3],
     visible_worlds_mask: wp.array[int],
+    # Optional: body variant rows, whose empty rows are skipped
+    shape_variant_row: wp.array[wp.bool],
+    shape_variant_shape: wp.array[wp.int32],
 ):
     """Computes the intersection of a ray with all geometries in the scene.
 
@@ -801,8 +855,14 @@ def raycast_kernel(
         shape_world: Optional array mapping shape index to world index. Can be empty to disable world offsets.
         world_offsets: Optional array of world offsets. Can be empty to disable world offsets.
         visible_worlds_mask: Optional mask array (1=visible, 0=hidden per world). Can be empty to disable filtering.
+        shape_variant_row: Optional mask of body variant rows. Can be empty for models without variants.
+        shape_variant_shape: Variant shape each variant row holds, ``-1`` for an empty row, which is
+            skipped. Can be empty for models without variants.
     """
     shape_idx = wp.tid()
+
+    if shape_variant_row.shape[0] > 0 and shape_variant_row[shape_idx] and shape_variant_shape[shape_idx] < 0:
+        return
 
     # Skip shapes from non-visible worlds
     if visible_worlds_mask and shape_world.shape[0] > 0:
@@ -905,6 +965,16 @@ def intersect_ray(
         fast_math: Whether to compile the intersection kernel with fast math enabled.
     """
 
+    if model.bvh_shape_enabled is not None and model.bvh_shape_count_enabled == 0:
+        # The shape BVH was built but no shape was selected, so every ray misses.
+        if out_dist is not None:
+            out_dist.fill_(-1.0)
+        if out_shape_id is not None:
+            out_shape_id.fill_(-1)
+        if out_normal is not None:
+            out_normal.zero_()
+        return
+
     if model.bvh_shapes is None:
         raise RuntimeError(
             "BVH raycasting requires a shape BVH built for the queried state. "
@@ -954,6 +1024,8 @@ def intersect_ray(
             bvh_shape_id = wp.int32(0)
 
             while wp.bvh_query_next(query, bvh_shape_id, min_dist):
+                if bvh_shape_enabled[bvh_shape_id] == BVH_SHAPE_INACTIVE:
+                    continue
                 shape_id = wp.int32(bvh_shape_enabled[bvh_shape_id])
                 geom_type = shape_type[shape_id]
 
@@ -1000,7 +1072,7 @@ def intersect_ray(
         inputs=[
             model.bvh_shapes.id,
             model.bvh_shapes_group_roots,
-            model.bvh_shape_enabled,
+            model._bvh_shape_active_leaves,
             model.bvh_shape_world_transforms,
             model.shape_type,
             model.shape_scale,

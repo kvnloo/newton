@@ -1,14 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-###########################################################################
-# Example for basic DR TestMech system
-#
-# Shows how to simulate DR TestMech with multiple worlds using SolverKamino.
-#
-# Command: python -m newton.examples kamino_basic_dr_testmech --world-count 16
-#
-###########################################################################
+"""Example for basic DR TestMech system
+
+Shows how to simulate DR TestMech with multiple worlds using SolverKamino.
+
+Success criteria:
+- A mechanism with multiple linked pieces moves back and forth.
+- Motion propagates through its joints and links without disconnection.
+
+Runs:
+- `python -m newton.examples kamino_basic_dr_testmech`
+- `python -m newton.examples kamino_basic_dr_testmech --world-count 16`
+"""
 
 import warp as wp
 
@@ -33,7 +37,6 @@ class Example:
         newton.solvers.SolverKamino.register_custom_attributes(robot_builder)
         robot_builder.default_shape_cfg.margin = 1e-6
         robot_builder.default_shape_cfg.gap = 0.01
-
         # Load the DR TestMech USD and add it to the builder
         asset_path = newton.utils.download_asset("disneyresearch")
         asset_file = str(asset_path / "dr_testmech/usd" / "dr_testmech.usda")
@@ -75,10 +78,6 @@ class Example:
 
         # Attach the model to the viewer for visualization
         self.viewer.set_model(self.model)
-
-        # Warm-start the simulation
-        self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
-        self.solver.reset(self.state_0)
 
         # Capture the simulation graph if running on CUDA
         # NOTE: This only has an effect on GPU devices

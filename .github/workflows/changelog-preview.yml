@@ -1,0 +1,47 @@
+# Verify that Towncrier can render pending fragments without changing the repository.
+name: Changelog fragment preview
+permissions:
+  contents: read
+
+on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+    branches:
+      - main
+      - "release-*"
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-on-${{ github.event_name }}-from-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            files.pythonhosted.org:443
+            github.com:443
+            pypi.org:443
+            raw.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            releases.astral.sh:443
+
+      - name: Checkout repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        with:
+          version: "0.13.5"
+          prune-cache: true
+      - name: Preview Towncrier rendering
+        run: >
+          uvx --from towncrier==25.8.0 towncrier build --draft
+          --version 0.0.0 --date 1970-01-01

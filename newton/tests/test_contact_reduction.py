@@ -15,6 +15,7 @@ import warp as wp
 
 from newton._src.geometry.contact_reduction import (
     _POLYHEDRON_BINS,
+    _POLYHEDRON_NORMALS_DATA,
     FACE_NORMALS,
     MAX_CONTACTS_PER_PAIR,
     NORMAL_BINNING_POLYHEDRON,
@@ -22,6 +23,7 @@ from newton._src.geometry.contact_reduction import (
     NUM_SPATIAL_DIRECTIONS,
     NUM_VOXEL_DEPTH_SLOTS,
     compute_num_reduction_slots,
+    get_face_normal,
     get_slot,
 )
 from newton.tests.unittest_utils import add_function_test, get_test_devices
@@ -37,6 +39,13 @@ def _get_slot_kernel(
     slots[tid] = get_slot(normals[tid])
 
 
+@wp.kernel
+def _get_face_normal_kernel(normals: wp.array[wp.vec3]):
+    """Fetch every configured face normal through the device lookup."""
+    tid = wp.tid()
+    normals[tid] = get_face_normal(tid)
+
+
 class TestContactReduction(unittest.TestCase):
     """Tests for contact reduction functionality."""
 
@@ -46,6 +55,15 @@ class TestContactReduction(unittest.TestCase):
 # =============================================================================
 # Face-normal geometry tests
 # =============================================================================
+
+
+def test_face_normal_lookup_matches_matrix(test, device):
+    """Verify the device lookup exactly reproduces the configured face-normal matrix."""
+    normals = wp.empty(NUM_NORMAL_BINS, dtype=wp.vec3, device=device)
+    wp.launch(_get_face_normal_kernel, dim=NUM_NORMAL_BINS, inputs=[normals], device=device)
+
+    expected = np.array([[FACE_NORMALS[i, j] for j in range(3)] for i in range(NUM_NORMAL_BINS)], dtype=np.float32)
+    np.testing.assert_array_equal(normals.numpy(), expected)
 
 
 def test_face_normals_are_unit_vectors(test, device):
@@ -90,7 +108,7 @@ def test_compute_num_reduction_slots(test, device):
 
 
 def test_get_slot_axis_aligned_normals(test, device):
-    """Test get_slot with axis-aligned normals."""
+    """Keep axis-aligned normals and nearby ground and wall normals in valid, stable bins."""
     test_normals = [
         wp.vec3(0.0, 1.0, 0.0),  # +Y (top)
         wp.vec3(0.0, -1.0, 0.0),  # -Y (bottom)
@@ -111,11 +129,49 @@ def test_get_slot_axis_aligned_normals(test, device):
         test.assertGreaterEqual(slot, 0, f"Slot {i} is negative")
         test.assertLess(slot, NUM_NORMAL_BINS, f"Slot {i} exceeds max ({NUM_NORMAL_BINS})")
 
+    # Require the same clearance around every coordinate axis. Keep thresholds
+    # just inside the geometric margins to allow for the rounded table entries.
+    protected_degrees = {"hexahedron": 44.0, "octahedron": 19.0, "dodecahedron": 14.0, "icosahedron": 14.0}
+    axes = np.asarray(test_normals)
+
+    # Check every table on CI even when only one configuration is compiled.
+    for polyhedron, values in _POLYHEDRON_NORMALS_DATA.items():
+        with test.subTest(polyhedron=polyhedron):
+            tilt = np.deg2rad(protected_degrees[polyhedron])
+            tilted_normals = []
+            for axis in axes:
+                tangent_axes = np.eye(3)[axis == 0.0]
+                for angle in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
+                    tangent = np.cos(angle) * tangent_axes[0] + np.sin(angle) * tangent_axes[1]
+                    tilted_normals.append(np.cos(tilt) * axis + np.sin(tilt) * tangent)
+            tilted_normals = np.asarray(tilted_normals, dtype=np.float32)
+            if polyhedron == NORMAL_BINNING_POLYHEDRON:
+                configured_tilted_normals = tilted_normals
+            faces = np.asarray(values, dtype=np.float32).reshape(-1, 3)
+            best_faces = (axes @ faces.T).argmax(axis=1)
+            # Bound the whole cone, including directions between the samples:
+            # a bin boundary is perpendicular to the difference of its faces.
+            margins = []
+            for axis, best in zip(axes, best_faces, strict=True):
+                differences = faces[best] - np.delete(faces, best, axis=0)
+                distances = differences @ axis / np.linalg.norm(differences, axis=1)
+                margin = np.rad2deg(np.arcsin(np.clip(distances, -1.0, 1.0))).min()
+                test.assertGreater(margin, protected_degrees[polyhedron])
+                margins.append(margin)
+            test.assertLess(np.ptp(margins), 1.0e-4, "Axis clearances must agree within table rounding error")
+            expected = np.repeat(best_faces[:, None], 32, axis=1)
+            np.testing.assert_array_equal((tilted_normals @ faces.T).argmax(axis=1).reshape(6, 32), expected)
+
+    normals = wp.array(configured_tilted_normals, dtype=wp.vec3, device=device)
+    slots = wp.empty(len(configured_tilted_normals), dtype=int, device=device)
+    wp.launch(_get_slot_kernel, dim=len(configured_tilted_normals), inputs=[normals, slots], device=device)
+    np.testing.assert_array_equal(slots.numpy().reshape(6, 32), np.repeat(slots_np[:, None], 32, axis=1))
+
 
 def test_get_slot_matches_best_face_normal(test, device):
     """Test that get_slot returns the face with highest dot product."""
     rng = np.random.default_rng(42)
-    test_normals_np = rng.standard_normal((50, 3)).astype(np.float32)
+    test_normals_np = rng.standard_normal((2048, 3)).astype(np.float32)
     test_normals_np /= np.linalg.norm(test_normals_np, axis=1, keepdims=True)
 
     test_normals = [wp.vec3(n[0], n[1], n[2]) for n in test_normals_np]
@@ -149,6 +205,12 @@ devices = get_test_devices()
 for device in devices:
     add_function_test(
         TestContactReduction, "test_face_normals_are_unit_vectors", test_face_normals_are_unit_vectors, devices=[device]
+    )
+    add_function_test(
+        TestContactReduction,
+        "test_face_normal_lookup_matches_matrix",
+        test_face_normal_lookup_matches_matrix,
+        devices=[device],
     )
     add_function_test(
         TestContactReduction, "test_face_normals_cover_sphere", test_face_normals_cover_sphere, devices=[device]

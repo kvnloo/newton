@@ -233,7 +233,7 @@ While :meth:`~newton.ModelBuilder.begin_world` and :meth:`~newton.ModelBuilder.e
 
    world_count: 2
 
-**replicate**: creates ``N`` copies of a builder, each as its own world, with optional spatial offsets.
+**replicate**: creates ``N`` copies of a builder, each as its own world by default, with optional spatial offsets.
 
 .. tip::
    Using physical ``spacing`` to separate replicated worlds moves bodies away from the origin,
@@ -254,7 +254,7 @@ While :meth:`~newton.ModelBuilder.begin_world` and :meth:`~newton.ModelBuilder.e
 
    scene = newton.ModelBuilder()
    scene.add_ground_plane()
-   scene.replicate(arm, world_count=4, spacing=(2.0, 0.0, 0.0))
+   scene.replicate(arm, copy_count=4, spacing=(2.0, 0.0, 0.0))
 
    replicated_model = scene.finalize()
    print("world_count:", replicated_model.world_count)
@@ -283,7 +283,7 @@ While :meth:`~newton.ModelBuilder.begin_world` and :meth:`~newton.ModelBuilder.e
    arm.approximate_meshes(method="convex_hull")
 
    scene = newton.ModelBuilder()
-   scene.replicate(arm, world_count=4)
+   scene.replicate(arm, copy_count=4)
 
    replicated_model = scene.finalize()
    print("world_count:", replicated_model.world_count)
@@ -291,6 +291,41 @@ While :meth:`~newton.ModelBuilder.begin_world` and :meth:`~newton.ModelBuilder.e
 .. testoutput::
 
    world_count: 4
+
+To place many copies of a builder in one shared world, for example to build a pile of bodies
+that collide with each other, pass ``separate_worlds=False``. The copies are added to the
+current world context in a single batched pass, which is much faster than calling
+:meth:`~newton.ModelBuilder.add_builder` once per copy. Open a world first, as below: outside a world
+context the copies join the global world ``-1``, and not every solver supports dynamic bodies there.
+
+.. testcode::
+
+   import newton
+   import warp as wp
+
+   box = newton.ModelBuilder()
+   body = box.add_body()
+   box.add_shape_box(body, hx=0.5, hy=0.5, hz=0.5)
+
+   scene = newton.ModelBuilder()
+   scene.add_ground_plane()
+   scene.begin_world()
+   scene.replicate(
+       box,
+       copy_count=3,
+       separate_worlds=False,
+       xforms=[wp.transform((0.0, 0.0, 0.5 + 1.1 * i), wp.quat_identity()) for i in range(3)],
+   )
+   scene.end_world()
+
+   pile_model = scene.finalize()
+   print("world_count:", pile_model.world_count)
+   print("body_world:", pile_model.body_world.numpy().tolist())
+
+.. testoutput::
+
+   world_count: 1
+   body_world: [0, 0, 0]
 
 
 .. _implicit-mpm-worlds:
@@ -326,14 +361,18 @@ Per-World Reset Masks
 ---------------------
 
 The optional ``world_mask`` passed to :meth:`~newton.solvers.SolverBase.reset`
-has shape ``(world_count + 1,)``. Entries ``[0, world_count)`` select local
-worlds, and the final entry selects global entities whose world index is
-``-1``. An all-true mask therefore selects the same worlds as ``None``.
-Solvers that do not support global dynamic objects accept the final entry as a
-no-op.
+is a one-dimensional Warp boolean array on the solver device with shape
+``(world_count + 1,)``. Entries ``[0, world_count)`` select local worlds, and
+the final entry selects global entities whose world index is ``-1``. An
+all-true mask therefore selects the same entities as ``None``. ``None`` remains
+the full-reset form, however, so a solver may also clear bookkeeping or caches
+that have no per-world ownership. Solvers that do not support global dynamic
+objects accept the final entry as a no-op.
 
-The legacy shape ``(world_count,)`` remains available during its deprecation
-period. It selects local worlds only and leaves global entities unselected.
+.. deprecated:: 1.5
+   The legacy shape ``(world_count,)`` remains available during its
+   deprecation period. It selects local worlds only and leaves global entities
+   unselected.
 
 .. _Per-world gravity:
 
@@ -345,9 +384,12 @@ Each world can have its own gravity vector, which is useful for simulating diffe
 Per-world gravity can be configured at build time via the ``gravity`` argument of :meth:`~newton.ModelBuilder.begin_world`,
 or modified at runtime via :meth:`~newton.Model.set_gravity`:
 
-.. note::
-   Global entities (world index ``-1``) use the gravity of world ``0``.
-   Keep this in mind when mixing global and world-specific entities with different gravity vectors.
+The builder's :attr:`~newton.ModelBuilder.gravity` is the default for new local worlds and the
+dedicated gravity for global entities (world index ``-1``). The final element of
+:attr:`~newton.Model.gravity` stores this global gravity, so the array has shape
+``(world_count + 1,)`` and ``vec3`` elements when the builder contains explicit local
+worlds. Legacy implicit single-world models retain one shared entry with shape ``(1,)``;
+updates for world ``0`` therefore continue to affect their global entities.
 
 .. testcode::
 
@@ -365,12 +407,93 @@ or modified at runtime via :meth:`~newton.Model.set_gravity`:
    # Set different gravity for each world
    model.set_gravity((0.0, 0.0, -9.81), world=0)  # Earth
    model.set_gravity((0.0, 0.0, -1.62), world=1)  # Moon
+   model.set_gravity((0.0, 0.0, -3.71), world=-1)  # Global entities
 
-   print("Gravity shape:", model.gravity.numpy().shape)
+   print("Gravity shape:", model.gravity.shape)
 
 .. testoutput::
 
-   Gravity shape: (2, 3)
+   Gravity shape: (3,)
+
+
+.. _Body shape variants:
+
+Per-World Body Shape Variants
+-----------------------------
+
+.. experimental::
+
+   Body variants may change without a deprecation period.
+
+A body can carry several alternative shape sets, such as the objects of an asset catalog, and
+each world can select a different one at reset. Declare the variants with
+:meth:`~newton.ModelBuilder.add_body_variants`, passing one single-body builder per variant, such
+as an asset loaded with :meth:`~newton.ModelBuilder.add_usd`. The body gets one block of shape rows
+per role: colliders, then other shapes such as visuals, then sites. Each block has as many rows as
+the variant with the most shapes of that role, so a row is a collider, a visual, or a site for
+every variant. At runtime, :meth:`~newton.Model.select_body_variants` copies each of the selected
+variant's shapes into the next row of its role, in the variant's order, on the device and without
+host synchronization. It empties the rows the variant does not use and sets the body's mass
+properties to those of the body as built plus the variant. It returns the :class:`~newton.ModelFlags` to pass to solvers and viewers:
+
+.. testcode::
+
+   import warp as wp
+   import newton
+
+   cube = newton.ModelBuilder()
+   cube.add_shape_box(cube.add_body(label="cube"), hx=0.1, hy=0.1, hz=0.1)
+   ball = newton.ModelBuilder()
+   ball.add_shape_sphere(ball.add_body(label="ball"), radius=0.1)
+
+   env = newton.ModelBuilder()
+   body = env.add_body(label="object")
+   env.add_body_variants(body, [cube, ball])
+
+   scene = newton.ModelBuilder()
+   scene.replicate(env, copy_count=2)
+   model = scene.finalize()
+
+   # World 1 switches to the ball; world 0 keeps the cube.
+   flags = model.select_body_variants(wp.array([0, 1], dtype=wp.int32, device=model.device))
+   # solver.notify_model_changed(flags)
+   # viewer.notify_model_changed(flags)
+   print(model.body_variant_labels(0), model.body_variant.numpy())
+
+.. testoutput::
+
+   ['cube', 'ball'] [0 1]
+
+Variant ids are positions in the list passed to :meth:`~newton.ModelBuilder.add_body_variants`;
+they are the same in every world. Bodies copied with :meth:`~newton.ModelBuilder.add_builder` or
+:meth:`~newton.ModelBuilder.replicate` share their variants, which :meth:`~newton.ModelBuilder.finalize`
+stores once: each variant shape is stored a single time, and each world only adds its rows, so
+model memory grows with the catalog size plus the rows of all worlds, not with their product.
+
+A row takes everything authored on the variant shape it holds: geometry, the collision data derived
+from it, flags, color, opacity, materials, and model-assigned shape custom attributes. Apply domain
+randomization after selecting. A row keeps its label, world, collision group, and filter pairs, so
+the i-th colliders of all variants must share a collision group. Empty rows have
+their collision and visibility flags cleared. Shapes added to the body directly stay in place for
+every variant.
+
+Collision detection, sensors, and viewers are sized at construction for every variant a body can
+select. Current limitations:
+
+- Contacts must come from :class:`~newton.CollisionPipeline` for models with variants:
+  ``SolverMuJoCo`` requires ``use_mujoco_contacts=False``, ``SolverKamino`` requires
+  ``use_collision_detector=False``, and ``SolverImplicitMPM`` is unsupported. ``SolverMuJoCo``
+  compiles one geom layout for all worlds, so construct it before selecting different variants per
+  world. It follows per-world ``solref``, ``solimp``, ``solmix``, and friction after a selection, but
+  ``condim`` and ``priority`` stay as compiled, all worlds use world 0's site sizes, spatial tendons
+  cannot wrap around variant shapes, and its MuJoCo viewer is unavailable.
+- Variant shapes cannot be planes, heightfields, Gaussians, or hydroelastic shapes.
+- :class:`~newton.sensors.SensorCamera` and :func:`~newton.intersect_ray` follow selections after
+  the next :meth:`~newton.Model.bvh_refit_shapes`. The deprecated ``SensorTiledCamera`` raises for
+  models with variants.
+- ``ViewerGL``, ``ViewerViser``, and ``ViewerNull`` follow selections through
+  :meth:`~newton.viewer.ViewerBase.notify_model_changed`; ``ViewerUSD``, ``ViewerRerun``,
+  ``ViewerFile``, and ``ViewerRTX`` raise :class:`NotImplementedError` when notified of one.
 
 
 .. _World-entity partitioning:

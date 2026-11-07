@@ -1,15 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-###########################################################################
-# Example Domino Spiral
-#
-# Places dominoes along a spiral and tilts the first one to start a
-# contact-driven chain reaction.
-#
-# Command: python -m newton.examples domino_spiral
-#
-###########################################################################
+"""Example Domino Spiral
+
+Places dominoes along a spiral and tilts the first one to start a
+contact-driven chain reaction.
+
+Success criteria:
+- Thirty dominoes stand along a spiral, with the first tilted to initiate contact.
+- Toppling propagates along the spiral through contact between neighboring dominoes.
+- The fallen dominoes remain on the ground without explosive scattering.
+
+Runs:
+- `python -m newton.examples domino_spiral`
+"""
 
 from __future__ import annotations
 
@@ -77,6 +81,8 @@ class Example:
         builder = newton.ModelBuilder(gravity=(0.0, 0.0, GRAVITY))
         builder.rigid_gap = 0.001
         builder.default_shape_cfg.ke = 1.0e4
+        if self.solver_name == "vbd":
+            builder.default_shape_cfg.ke = 1.0e5
         builder.default_shape_cfg.kd = 0.0
         builder.default_shape_cfg.kf = 1.0e3
         builder.default_shape_cfg.mu = 1.0
@@ -117,7 +123,10 @@ class Example:
         if self.solver_name == "xpbd":
             self.solver = newton.solvers.SolverXPBD(self.model, iterations=20, enable_restitution=True)
         elif self.solver_name == "vbd":
-            self.solver = newton.solvers.SolverVBD(self.model, iterations=10, rigid_contact_hard=False)
+            self.solver = newton.solvers.SolverVBD(
+                self.model,
+                iterations=10,
+            )
         elif self.solver_name == "mujoco":
             self.solver = newton.solvers.SolverMuJoCo(self.model, njmax=2048, nconmax=1024, cone="elliptic")
         elif self.solver_name == "featherstone":

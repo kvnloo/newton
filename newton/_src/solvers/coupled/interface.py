@@ -18,7 +18,8 @@ support a hook should override that method and raise
 Endpoint arrays use structure-of-arrays indexing. ``endpoint_kind`` contains
 ``CouplingInterface.EndpointKind`` values, ``endpoint_index`` contains local body
 or particle ids in the solver's model view, and ``endpoint_local_pos`` stores
-the body-frame point for body endpoints [m] or zero for particles.
+the body-frame offset of the point from the body COM for body endpoints [m]
+or zero for particles.
 
 Proxy maps are dense local-to-global arrays. ``body_local_to_proxy_global`` and
 ``particle_local_to_proxy_global`` are indexed by local ids in the destination
@@ -41,7 +42,16 @@ Supported hook signatures are:
     def coupling_notify_input_state_update(state, flags, *, iteration_restart=False, dt=0.0) -> None: ...
 
 
+    def coupling_notify_iteration_restarts(enabled) -> None: ...
+
+
+    def coupling_effective_mass_refresh_flags() -> int: ...
+
+
     def coupling_supports_inertial_property_refresh() -> bool: ...
+
+
+    def coupling_supports_full_surface_soft_contacts() -> bool: ...
 
 
     def coupling_rewind_proxy_body(
@@ -89,7 +99,7 @@ from typing import TYPE_CHECKING
 import warp as wp
 
 from ...geometry import ParticleFlags
-from ...sim import BodyFlags, StateFlags
+from ...sim import BodyFlags, ModelFlags, StateFlags
 from .proxy_utils import (
     filter_proxy_rigid_contacts_kernel,
     harvest_proxy_momentum_forces_kernel,
@@ -138,7 +148,7 @@ class CouplingInterface:
         Args:
             endpoint_kind: Endpoint kinds.
             endpoint_index: Endpoint-local body or particle ids.
-            endpoint_local_pos: Body-frame endpoint positions [m].
+            endpoint_local_pos: Body-frame endpoint offsets from the body COM [m].
             out: Output effective masses [kg].
         """
         del endpoint_local_pos
@@ -191,7 +201,7 @@ class CouplingInterface:
         Args:
             endpoint_kind: Endpoint kinds.
             endpoint_index: Endpoint-local body or particle ids.
-            endpoint_local_pos: Body-frame endpoint positions [m].
+            endpoint_local_pos: Body-frame endpoint offsets from the body COM [m].
             out_mass: Output effective masses [kg].
             out_inertia: Optional output body inertia tensors [kg m^2]. Body
                 effective inertia must not be smaller than modeled inertia
@@ -242,6 +252,34 @@ class CouplingInterface:
         """
         del state, flags, iteration_restart, dt
 
+    def coupling_notify_iteration_restarts(self, enabled: bool) -> None:
+        """Declare whether the coupler may restart a step's solve.
+
+        Called once after the entry solvers are constructed, before any other hook, so it is also where a
+        solver rejects coupled options it does not support. With ``enabled`` false, ``iteration_restart``
+        is only passed with ``dt=0`` during a reset, so a solver can skip saving the state a restart restores.
+
+        Args:
+            enabled: Whether ``coupling_notify_input_state_update`` may receive ``iteration_restart=True``
+                between steps.
+        """
+        del enabled
+
+    def coupling_effective_mass_refresh_flags(self) -> int:
+        """Return the :class:`~newton.ModelFlags` after which this solver's effective masses need refreshing.
+
+        Proxy and ADMM couplers evaluate effective masses again on the host after these notifications.
+        The default covers body, body inertial, joint DOF, armature and reference-pose updates;
+        a solver whose effective masses depend on fewer properties can return a narrower set.
+        """
+        return int(
+            ModelFlags.BODY_INERTIAL_PROPERTIES
+            | ModelFlags.BODY_PROPERTIES
+            | ModelFlags.JOINT_DOF_PROPERTIES
+            | ModelFlags.JOINT_DOF_INERTIAL_PROPERTIES
+            | ModelFlags.JOINT_REFERENCE_POSE_PROPERTIES
+        )
+
     def coupling_supports_inertial_property_refresh(self) -> bool:
         """Return whether inertial property refresh is safe during graph capture.
 
@@ -249,6 +287,18 @@ class CouplingInterface:
         their derived inertial buffers with device work only, should override
         this to return ``True`` and provide a graph-capturable implementation
         of :meth:`notify_model_changed` for BODY_INERTIAL_PROPERTIES.
+        """
+        return False
+
+    def coupling_supports_full_surface_soft_contacts(self) -> bool:
+        """Return whether the solver consumes edge and face soft contacts.
+
+        Full-surface entry buffers retain detected geometry and mesh feature data.
+        Mesh force evaluation must test eligibility at the consumer's current
+        positions; a force-mask snapshot from an earlier state is insufficient.
+        Geometric constraints can consume all detected rows independently.
+        Entries with particles must support this contract to receive full-surface
+        contacts; rigid-only entries receive no soft contacts and need not support it.
         """
         return False
 
@@ -467,7 +517,7 @@ def _coupling_eval_body_gravity_acceleration_kernel(
     out: wp.array[wp.vec3],
 ):
     i = wp.tid()
-    out[i] = gravity[wp.max(body_world[i], 0)]
+    out[i] = gravity[body_world[i]]
 
 
 @wp.kernel(enable_backward=False)
@@ -477,7 +527,7 @@ def _coupling_eval_particle_gravity_acceleration_kernel(
     out: wp.array[wp.vec3],
 ):
     i = wp.tid()
-    out[i] = gravity[wp.max(particle_world[i], 0)]
+    out[i] = gravity[particle_world[i]]
 
 
 @wp.func

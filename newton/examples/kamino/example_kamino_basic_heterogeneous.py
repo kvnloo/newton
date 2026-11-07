@@ -1,12 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-###########################################################################
-# Example for simulating all basic models as a single heterogeneous multi-world model with SolverKamino.
-#
-# Command: python -m newton.examples kamino_basic_heterogeneous
-#
-###########################################################################
+"""Example for simulating all basic models as a single heterogeneous multi-world model with SolverKamino.
+
+Success criteria:
+- Six sections show a fixed pendulum, cartpole, two floating pendulum variants, a rigid box, and a
+  four-bar linkage.
+- Right-drag movable bodies: the mechanisms respond while preserving their joints and remaining
+  bounded.
+
+Runs:
+- `python -m newton.examples kamino_basic_heterogeneous`
+"""
 
 import argparse
 
@@ -94,14 +99,13 @@ class Example:
         self.control = self.model.control()
         self.collision_pipeline = newton.CollisionPipeline(self.model)
         self.contacts = self.collision_pipeline.contacts()
+        self.solver_observables = self.solver.observables(
+            contacts=self.contacts, kinds={self.solver.ObservableKind.CONTACT_F}
+        )
 
         # Attach the model to the viewer for visualization
         self.viewer.set_model(self.model)
         self.viewer.set_world_offsets(spacing=(5.0, 5.0, 0.0))
-
-        # Warm-start the simulation
-        self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
-        self.solver.reset(self.state_0)
 
         # Capture the simulation graph if running on CUDA
         # NOTE: This only has an effect on GPU devices
@@ -127,8 +131,14 @@ class Example:
         for _ in range(self.sim_substeps):
             self.state_0.clear_forces()
             self.viewer.apply_forces(self.state_0)
-            self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
-            self.solver.update_contacts(self.contacts, self.state_0)
+            self.solver.step(
+                self.state_0,
+                self.state_1,
+                self.control,
+                self.contacts,
+                self.sim_dt,
+                observables=self.solver_observables,
+            )
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
@@ -145,7 +155,7 @@ class Example:
         # so contacts are rendered with self.state_1 to match the body positions at the
         # time of contact generation.
         self.viewer.log_state(self.state_0)
-        self.viewer.log_contacts(self.contacts, self.state_1)
+        self.viewer.log_contacts(self.contacts, self.state_1, observables=self.solver_observables)
         self.viewer.end_frame()
 
     def test_final(self):

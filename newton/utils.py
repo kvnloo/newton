@@ -66,25 +66,6 @@ __all__ += [
 ]
 
 # ==================================================================================
-# cable utils
-# ==================================================================================
-from ._src.utils.cable import (  # noqa: E402
-    CableStiffness,
-    create_cable_stiffness_from_elastic_moduli,
-    create_parallel_transport_cable_quaternions,
-    create_straight_cable_points,
-    create_straight_cable_points_and_quaternions,
-)
-
-__all__ += [
-    "CableStiffness",
-    "create_cable_stiffness_from_elastic_moduli",
-    "create_parallel_transport_cable_quaternions",
-    "create_straight_cable_points",
-    "create_straight_cable_points_and_quaternions",
-]
-
-# ==================================================================================
 # world utils
 # ==================================================================================
 from ._src.utils import compute_world_offsets  # noqa: E402
