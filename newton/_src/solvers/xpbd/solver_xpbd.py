@@ -103,6 +103,7 @@ class SolverXPBD(TendonStateMixin, SolverBase, CouplingInterface):
           :attr:`~newton.Model.joint_target_ke`/:attr:`~newton.Model.joint_target_kd`, and
           :attr:`~newton.Control.joint_f` are supported.
           Joint limits are enforced as hard positional constraints (``joint_limit_ke``/``joint_limit_kd`` are not used).
+          Single-angular-DOF joints use a limit-centered angle branch for ranges narrower than 2*pi.
         - :attr:`~newton.Model.joint_armature`, :attr:`~newton.Model.joint_friction`,
           :attr:`~newton.Model.joint_effort_limit`, :attr:`~newton.Model.joint_velocity_limit`,
           and :attr:`~newton.Model.joint_target_mode` are not supported.
