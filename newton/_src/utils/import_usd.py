@@ -52,6 +52,7 @@ from ..usd.particles import find_particle_prims, import_particles
 from ..usd.schema_resolver import PrimType, SchemaResolver, SchemaResolverManager
 from ..usd.schemas import SchemaResolverNewton
 from .color import color_linear_to_srgb
+from .deprecation import warn_deprecation
 from .import_usd_deformable_attachments import (
     _deformable_import_attachments,
     _deformable_import_element_collision_filters,
@@ -280,9 +281,11 @@ def parse_usd(
             colliders on bodies with visual-only geometry. Default is False.
         parse_mujoco_options: Whether MuJoCo solver options from the PhysicsScene should be parsed. If False, solver options are not loaded and custom attributes retain their default values. Default is True.
         convert_mjc_equality_constraints: Whether MuJoCo equality schemas should be converted to Newton loop
-            joints or mimic constraints while preserving MuJoCo equality metadata for SolverMuJoCo. If False,
-            equality constraints are preserved in the ``mujoco:equality_constraint`` custom-attribute namespace
-            and finalize under ``model.mujoco.equality_constraint_*``.
+            joints or mimic constraints while preserving MuJoCo equality metadata for SolverMuJoCo. A weld
+            becomes a FIXED loop joint, or a BALL loop joint when its ``torquescale`` is 0 (see "Link-break welds
+            and MuJoCo welds" in the articulation docs). If False, equality constraints are preserved in the
+            ``mujoco:equality_constraint`` custom-attribute namespace and finalize under
+            ``model.mujoco.equality_constraint_*``.
         mesh_maxhullvert: Maximum vertices for convex hull approximation of meshes. Note that an authored ``newton:maxHullVertices`` attribute on any shape with a ``NewtonMeshCollisionAPI`` will take priority over this value.
         schema_resolvers: Resolver instances in priority order. Default is to only parse Newton-specific attributes.
             Schema resolvers collect per-prim "solver-specific" attributes, see :ref:`schema_resolvers` for more information.
@@ -313,6 +316,9 @@ def parse_usd(
             Torch checkpoints. Only use this for trusted USD assets and
             checkpoints: loading a Torch checkpoint may execute code during
             :meth:`newton.ModelBuilder.finalize`. Defaults to ``False``.
+
+            .. deprecated:: 1.8
+                Torch checkpoints are deprecated; export the network to ONNX.
 
     Returns:
         .. experimental::
@@ -405,9 +411,9 @@ def parse_usd(
             * - ``"path_soft_attrs"``
               - Mapping from prim path (str) of a soft body (a volume deformable, or a legacy bare TetMesh) to its as-authored, solver-neutral attributes (``resolved_density``). Present only with ``return_deformable_results=True``.
             * - ``"path_attachment_map"``
-              - Mapping from prim path (str) of a supported ``PhysicsAttachment`` prim to the created joint indices. Curve-to-curve ``point``->``point`` junctions are consumed as rod-graph topology and are absent from this mapping. Present only with ``return_deformable_results=True``.
+              - Mapping from prim path (str) of a supported cable ``PhysicsAttachment`` prim to the created joint indices. Cloth/volume particle-body attachments are not joints and are listed only in ``path_attachment_attrs``. Curve-to-curve ``point``->``point`` junctions are consumed as rod-graph topology and are absent from this mapping. Present only with ``return_deformable_results=True``.
             * - ``"path_attachment_attrs"``
-              - Mapping from prim path (str) of a ``PhysicsAttachment`` prim to its parsed, solver-neutral attributes and any unsupported reason. Junctions consumed as rod-graph topology are absent here as well. Present only with ``return_deformable_results=True``.
+              - Mapping from prim path (str) of a ``PhysicsAttachment`` prim to its parsed, solver-neutral attributes and any unsupported reason. Imported cloth/volume attachments list their particle-body attachment indices under ``"attachment_particle_body_indices"``. Junctions consumed as rod-graph topology are absent here as well. Present only with ``return_deformable_results=True``.
             * - ``"mass_unit"``
               - The stage's Kilograms Per Unit (KGPU) definition (1.0 by default)
             * - ``"linear_unit"``
@@ -433,6 +439,11 @@ def parse_usd(
             * - ``"actuator_count"``
               - Number of external actuators parsed from the USD stage
     """
+    if allow_unsafe_torch_checkpoints:
+        from ..actuators.utils import _ALLOW_UNSAFE_TORCH_CHECKPOINTS_DEPRECATION_MSG  # noqa: PLC0415
+
+        warn_deprecation(_ALLOW_UNSAFE_TORCH_CHECKPOINTS_DEPRECATION_MSG)
+
     # Early validation of base joint parameters
     builder._validate_base_joint_params(floating, base_joint, parent_body)
     first_imported_joint = builder.joint_count
@@ -2426,6 +2437,7 @@ def parse_usd(
             custom_attrs: dict[str, Any],
         ) -> None:
             try:
+                # A world-side weld anchor or relpose is in stage coordinates, which incoming_world_xform places.
                 _, joint_idx = mjc_add_equality_loop_joint(
                     builder,
                     eq_type,
@@ -2437,6 +2449,7 @@ def parse_usd(
                     joint_path,
                     enabled,
                     custom_attrs,
+                    world_xform=incoming_world_xform,
                 )
             except ValueError:
                 warnings.warn(
@@ -2528,7 +2541,9 @@ def parse_usd(
                         else site1_local_pos
                     )
                     relpose_rot = local_rot0 * wp.quat_inverse(local_rot1)
-                    relpose_pos = local_pos0 - wp.quat_rotate(relpose_rot, local_pos1)
+                    # MuJoCo's weld holds the anchor at relpose's position in body0's frame (not body1's origin
+                    # there), so use where the anchor sits when the joint's two frames coincide.
+                    relpose_pos = local_pos0 + wp.quat_rotate(relpose_rot, anchor - local_pos1)
                     torquescale_attr = joint_prim.GetAttribute("mjc:torqueScale")
                     torquescale = (
                         float(torquescale_attr.Get()) if torquescale_attr and torquescale_attr.HasValue() else 1.0
@@ -2818,7 +2833,7 @@ def parse_usd(
 
     # Parse Newton actuator prims from the USD stage.
     from ..actuators.delay import Delay  # noqa: PLC0415
-    from ..actuators.usd_parser import parse_actuator_prim  # noqa: PLC0415
+    from ..actuators.usd_parser import _parse_actuator_prim  # noqa: PLC0415
 
     actuator_count = 0
     path_to_dof = {
@@ -2835,7 +2850,7 @@ def parse_usd(
         prim_path = str(prim.GetPath())
         if any(re.match(pattern, prim_path) for pattern in ignore_paths):
             continue
-        parsed = parse_actuator_prim(prim, allow_unsafe_torch_checkpoints=allow_unsafe_torch_checkpoints)
+        parsed = _parse_actuator_prim(prim, allow_unsafe_torch_checkpoints)
         if parsed is None:
             continue
         target_path = parsed.target_path

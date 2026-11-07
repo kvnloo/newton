@@ -502,7 +502,12 @@ class SolverCoupled(SolverBase, CouplingInterface):
             joints: Global joint ids owned by this entry.
             shapes: Global shape ids owned by this entry.
             configure_view: Optional callback invoked after compaction for
-                entry-local view overrides.
+                entry-local view overrides. Particle masses authored with the view's
+                mass mutators or array assignment persist across model notifications;
+                other particle masses continue to inherit parent updates.
+                Explicit particle attribute assignments and disable_particles calls
+                also persist; unmodified attributes inherit parent updates. Direct
+                writes through returned Warp arrays are not tracked.
             substeps: Number of substeps to run per coupled step.
             in_place: Whether the sub-solver may step in-place.
         """
@@ -844,7 +849,7 @@ class SolverCoupled(SolverBase, CouplingInterface):
                 self._apply_noncompact_body_particle_attachment_visibility(view, cfg)
             self._customize_compact_view(view)
             if cfg.configure_view is not None:
-                cfg.configure_view(view)
+                view._configure(cfg.configure_view)
             self._filter_shape_contact_pairs(view)
 
             index_maps = self._build_entry_index_maps(view, index_lists)
@@ -3030,6 +3035,7 @@ class SolverCoupled(SolverBase, CouplingInterface):
         contacts) own their own buffers internally.
         """
         self.validate_observables(observables, contacts)
+        self._require_unreduced_contacts(contacts)
         self._distribute_state(state_in, dt=dt)
         self._active_observables = observables
         try:
@@ -3796,6 +3802,8 @@ class SolverCoupled(SolverBase, CouplingInterface):
                 device=contacts.device,
             )
         filtered._contact_matching_mode = contacts.contact_matching_mode
+        # Entry solvers check this stamp; the filtered rows are as reduced as their source.
+        filtered._rigid_contact_body_pair_reduced = contacts.rigid_contact_body_pair_reduced
         filtered._enable_rigid_soft_full_surface_contact = bool(
             contacts._enable_rigid_soft_full_surface_contact and has_particles
         )
@@ -3834,7 +3842,9 @@ class SolverCoupled(SolverBase, CouplingInterface):
             self._project_compact_attributes(
                 entry.view,
                 entry.attribute_projections,
-                exclude=set(),
+                exclude=(
+                    entry.view._configured_particle_attributes if flags & int(ModelFlags.MODEL_PROPERTIES) else set()
+                ),
                 include=lambda attribute: self._attribute_matches_model_flags(attribute, flags),
                 source_model=True,
                 update_existing=True,
@@ -3845,6 +3855,13 @@ class SolverCoupled(SolverBase, CouplingInterface):
                 self._refresh_body_inertial_view_overrides(entry)
                 entry.view.mark_proxy_bodies(entry.proxy_body_local_indices)
 
+            if flags & int(ModelFlags.MODEL_PROPERTIES):
+                entry.view._restore_configured_particle_masses()
+                if entry.particle_dynamics_disabled_local_indices.shape[0] > 0:
+                    entry.view.zero_particle_mass(entry.particle_dynamics_disabled_local_indices)
+                    entry.view.disable_particles(entry.particle_dynamics_disabled_local_indices)
+                entry.view.mark_proxy_particles(entry.proxy_particle_local_indices)
+                entry.view._restore_configured_particle_disables()
             if flags & int(
                 ModelFlags.JOINT_PROPERTIES | ModelFlags.JOINT_DOF_PROPERTIES | ModelFlags.JOINT_DOF_FORCE_PROPERTIES
             ):
@@ -3895,7 +3912,7 @@ class SolverCoupled(SolverBase, CouplingInterface):
             if frequency == model_frequency.SHAPE or "pair_" in attribute.name:
                 return True
         if flags & int(ModelFlags.MODEL_PROPERTIES):
-            if frequency in (model_frequency.ONCE, model_frequency.WORLD):
+            if frequency in (model_frequency.ONCE, model_frequency.WORLD, model_frequency.PARTICLE):
                 return True
         if flags & int(ModelFlags.CONSTRAINT_PROPERTIES):
             if frequency in (model_frequency.CONSTRAINT_MIMIC, model_frequency.ATTACHMENT_PARTICLE_BODY):

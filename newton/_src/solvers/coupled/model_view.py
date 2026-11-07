@@ -5,16 +5,16 @@
 
 from __future__ import annotations
 
-import warnings
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import warp as wp
 
-from ...exceptions import NewtonDeprecationWarning
 from ...geometry import ParticleFlags
 from ...sim import BodyFlags, JointType, Model
+from ...utils.deprecation import warn_deprecation
 
 if TYPE_CHECKING:
     from ...sim import Control, State
@@ -50,6 +50,7 @@ class _AttributeNamespaceView(Model.AttributeNamespace):
     def __init__(self, parent: Model.AttributeNamespace, view: ModelView) -> None:
         super().__init__(object.__getattribute__(parent, "_name"))
         object.__setattr__(self, "_parent_namespace", parent)
+        object.__setattr__(self, "_view", view)
         self._removed_attributes.update(parent._removed_attributes)
         for name, (getter, message) in parent._deprecated_aliases.items():
             spec = view.parent._attribute_spec(f"{self._name}:{name}")
@@ -61,12 +62,21 @@ class _AttributeNamespaceView(Model.AttributeNamespace):
     def __getattr__(self, name: str):
         if name in self._deprecated_aliases:
             getter, message = self._deprecated_aliases[name]
-            warnings.warn(message, NewtonDeprecationWarning, stacklevel=2)
+            warn_deprecation(message)
             return getter()
         try:
             return super().__getattr__(name)
         except AttributeError:
             return getattr(object.__getattribute__(self, "_parent_namespace"), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        super().__setattr__(name, value)
+        view = self.__dict__.get("_view")
+        if view is not None and view._recording_particle_masses:
+            full_name = f"{self._name}:{name}"
+            spec = view.parent._attribute_spec(full_name)
+            if spec is not None and spec.frequency == view.parent.AttributeFrequency.PARTICLE:
+                view._configured_particle_attributes.add(full_name)
 
 
 class ModelView:
@@ -97,6 +107,11 @@ class ModelView:
         object.__setattr__(self, "_name", name)
         object.__setattr__(self, "_overrides", {})
         object.__setattr__(self, "_cache", {})
+        object.__setattr__(self, "_recording_particle_masses", False)
+        object.__setattr__(self, "_configured_particle_mass_mask", None)
+        object.__setattr__(self, "_configured_particle_masses", None)
+        object.__setattr__(self, "_configured_particle_attributes", set())
+        object.__setattr__(self, "_configured_disabled_particle_indices", [])
 
     # ------------------------------------------------------------------
     # Attribute delegation
@@ -157,6 +172,14 @@ class ModelView:
                 )
         if name.endswith("_count") or name == "shape_contact_pairs":
             object.__getattribute__(self, "_cache").clear()
+        if name in {"particle_mass", "particle_inv_mass"}:
+            self._record_particle_mass_override()
+        elif (
+            self._recording_particle_masses
+            and spec is not None
+            and spec.frequency == parent.AttributeFrequency.PARTICLE
+        ):
+            self._configured_particle_attributes.add(name)
         object.__getattribute__(self, "_overrides")[name] = value
 
     def __delattr__(self, name: str) -> None:
@@ -395,6 +418,68 @@ class ModelView:
     # ------------------------------------------------------------------
     # Helpers for common overrides
     # ------------------------------------------------------------------
+
+    def _configure(self, callback: Callable[[ModelView], None]) -> None:
+        """Retain particle masses explicitly authored by the entry configuration callback."""
+        object.__setattr__(self, "_recording_particle_masses", True)
+        try:
+            callback(self)
+        finally:
+            object.__setattr__(self, "_recording_particle_masses", False)
+        if self._configured_particle_mass_mask is not None:
+            object.__setattr__(
+                self, "_configured_particle_masses", (wp.clone(self.particle_mass), wp.clone(self.particle_inv_mass))
+            )
+
+    def _record_particle_mass_override(
+        self,
+        indices: wp.array[int] | None = None,
+        mask: wp.array[Any] | None = None,
+        *,
+        lumped: bool = False,
+    ) -> None:
+        """Record authored rows separately from ownership and proxy mass modifications."""
+        if not self._recording_particle_masses or self.particle_count == 0:
+            return
+        selected = self._configured_particle_mass_mask
+        if selected is None:
+            selected = wp.zeros(self.particle_count, dtype=int, device=self.device)
+            object.__setattr__(self, "_configured_particle_mass_mask", selected)
+        if indices is not None:
+            wp.launch(
+                _mark_particle_mass_indices_kernel, dim=indices.shape[0], inputs=[indices, selected], device=self.device
+            )
+        elif mask is not None:
+            wp.launch(
+                _mark_particle_mass_mask_kernel,
+                dim=mask.shape[0],
+                inputs=[mask, self.particle_inv_mass, lumped, selected],
+                device=self.device,
+            )
+        else:
+            selected.fill_(1)
+
+    def _restore_configured_particle_masses(self) -> None:
+        """Restore configured rows in-place after parent particle properties are projected."""
+        configured = self._configured_particle_masses
+        if configured is None:
+            return
+        wp.launch(
+            _restore_configured_particle_masses_kernel,
+            dim=self.particle_count,
+            inputs=[
+                self._configured_particle_mass_mask,
+                *configured,
+                self._cow_array("particle_mass"),
+                self._cow_array("particle_inv_mass"),
+            ],
+            device=self.device,
+        )
+
+    def _restore_configured_particle_disables(self) -> None:
+        """Reapply per-entry disable operations after parent flag projection."""
+        for indices in self._configured_disabled_particle_indices:
+            self.disable_particles(indices)
 
     def _cow_array(self, name: str) -> wp.array[Any]:
         """Return a view-local mutable copy of a parent model array.
@@ -707,6 +792,8 @@ class ModelView:
         if parent.particle_count == 0 or particle_indices.shape[0] == 0:
             return
 
+        if self._recording_particle_masses:
+            self._configured_disabled_particle_indices.append(wp.clone(particle_indices))
         particle_flags = self._cow_array("particle_flags")
         wp.launch(
             _clear_particle_flag_kernel,
@@ -767,6 +854,7 @@ class ModelView:
             inputs=[particle_indices, inv_mass, mass],
             device=parent.device,
         )
+        self._record_particle_mass_override(particle_indices)
 
     def scale_particle_mass(self, particle_indices: wp.array[int] | None, factor: float) -> None:
         """Scale mass for particles on this view by ``factor``.
@@ -809,6 +897,7 @@ class ModelView:
                 inputs=[particle_indices, float(factor), inv_mass, mass],
                 device=parent.device,
             )
+        self._record_particle_mass_override(particle_indices)
 
     def scale_particle_mass_mask(self, particle_mask: wp.array[int], factor: float) -> None:
         """Scale mass for particles whose mask entry is non-zero."""
@@ -828,6 +917,7 @@ class ModelView:
             inputs=[particle_mask, float(factor), inv_mass, mass],
             device=parent.device,
         )
+        self._record_particle_mass_override(mask=particle_mask)
 
     def add_particle_lumped_mass(self, particle_mass_lump: wp.array[float]) -> None:
         """Add diagonal lumped mass to particles on this view."""
@@ -844,6 +934,7 @@ class ModelView:
             inputs=[particle_mass_lump, inv_mass, mass],
             device=parent.device,
         )
+        self._record_particle_mass_override(mask=particle_mass_lump, lumped=True)
 
     def set_particle_mass(self, particle_indices: wp.array[int], particle_mass: wp.array[float]) -> None:
         """Set mass for the given particle indices.
@@ -865,6 +956,8 @@ class ModelView:
             inputs=[particle_indices, particle_mass, inv_mass, mass],
             device=parent.device,
         )
+
+        self._record_particle_mass_override(particle_indices)
 
 
 class _TemporaryStateArrayOverrides:
@@ -1213,3 +1306,34 @@ def _set_particle_mass_kernel(
         inv_mass[idx] = 1.0 / new_mass
     else:
         inv_mass[idx] = 0.0
+
+
+@wp.kernel(enable_backward=False)
+def _mark_particle_mass_indices_kernel(indices: wp.array[int], selected: wp.array[int]):
+    wp.atomic_max(selected, indices[wp.tid()], 1)
+
+
+@wp.kernel(enable_backward=False)
+def _mark_particle_mass_mask_kernel(
+    mask: wp.array[Any], inv_mass: wp.array[float], lumped: bool, selected: wp.array[int]
+):
+    i = wp.tid()
+    if lumped:
+        if mask[i] > 0 and inv_mass[i] > 0.0:
+            selected[i] = 1
+    elif mask[i] != 0:
+        selected[i] = 1
+
+
+@wp.kernel(enable_backward=False)
+def _restore_configured_particle_masses_kernel(
+    selected: wp.array[int],
+    configured_mass: wp.array[float],
+    configured_inv_mass: wp.array[float],
+    mass: wp.array[float],
+    inv_mass: wp.array[float],
+):
+    i = wp.tid()
+    if selected[i] != 0:
+        mass[i] = configured_mass[i]
+        inv_mass[i] = configured_inv_mass[i]

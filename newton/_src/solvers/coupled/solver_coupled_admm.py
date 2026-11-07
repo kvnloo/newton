@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -1826,6 +1827,7 @@ class SolverCoupledADMM(SolverCoupled):
                     entry.view.disable_body_dynamics(entry.body_dynamics_disabled_local_indices)
             if buf.particle_proximal_mass is not None:
                 entry.view._refresh_particle_mass_properties(entry.particle_local_to_global)
+                entry.view._restore_configured_particle_masses()
                 if entry.particle_dynamics_disabled_local_indices.shape[0] > 0:
                     entry.view.zero_particle_mass(entry.particle_dynamics_disabled_local_indices)
                 entry.view.add_particle_lumped_mass(buf.particle_proximal_mass)
@@ -2874,6 +2876,11 @@ class SolverCoupledADMM(SolverCoupled):
                 stiffness = float(stiffness_np[row])
                 if stiffness < 0.0:
                     raise ValueError(f"ADMM particle-body attachment {name} has negative stiffness")
+                if math.isinf(stiffness) and not is_model_source:
+                    raise ValueError(
+                        f"ADMM particle-body attachment {name} is hard; use "
+                        "ModelBuilder.add_attachment_particle_body() for hard attachments"
+                    )
                 damping = float(damping_np[row])
                 if damping < 0.0:
                     raise ValueError(f"ADMM particle-body attachment {name} has negative damping")
@@ -2908,6 +2915,15 @@ class SolverCoupledADMM(SolverCoupled):
         for name, body, particle, point, stiffness, damping in rows:
             body_entry = self._entry_name_for_body(body)
             particle_entry = self._entry_name_for_particle(particle)
+            if math.isinf(stiffness) and (
+                body_entry is None
+                or particle_entry != body_entry
+                or not isinstance(self._entries[body_entry].solver, SolverVBD)
+            ):
+                raise ValueError(
+                    "Hard particle-body attachments require both endpoints in the same SolverVBD entry; "
+                    f"attachment {name} has body entry {body_entry!r} and particle entry {particle_entry!r}"
+                )
             if body_entry is None or particle_entry is None:
                 unowned.append(name)
                 continue

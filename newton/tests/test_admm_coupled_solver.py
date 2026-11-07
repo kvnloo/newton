@@ -824,6 +824,45 @@ class TestAdmmProximal(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(part_g)))
 
 
+    def test_configured_particle_mass_survives_gamma_proximal_refresh(self):
+        """Retain authored mass when ADMM refreshes particle proximal properties on CPU."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        for i in range(2):
+            builder.add_particle(
+                pos=(float(i), 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.05,
+            )
+        model = builder.finalize(device="cpu")
+
+        def configure(view):
+            view.set_particle_mass(
+                wp.array([1], dtype=int, device=view.device),
+                wp.array([4.0], dtype=float, device=view.device),
+            )
+
+        solver = SolverCoupledADMM(
+            model,
+            entries=[
+                SolverCoupled.Entry(name="other", solver=SolverXPBD, particles=[0]),
+                SolverCoupled.Entry(name="custom", solver=SolverXPBD, particles=[1], configure_view=configure),
+            ],
+            coupling=SolverCoupledADMM.Config(iterations=1, rho=1.0, gamma=1.0),
+        )
+        view = solver.view("custom")
+        np.testing.assert_allclose(view.particle_mass.numpy(), [0.0, 4.0])
+        np.testing.assert_allclose(view.particle_inv_mass.numpy(), [0.0, 0.25])
+        for parent_last_mass in (7.0, 11.0):
+            parent_masses = np.array([3.0, parent_last_mass], dtype=np.float32)
+            model.particle_mass.assign(parent_masses)
+            model.particle_inv_mass.assign(1.0 / parent_masses)
+            solver.notify_model_changed(newton.ModelFlags.MODEL_PROPERTIES)
+            solver._refresh_admm_proximal_view_overrides(refresh_supported_solvers=False)
+            np.testing.assert_allclose(view.particle_mass.numpy(), [0.0, 4.0])
+            np.testing.assert_allclose(view.particle_inv_mass.numpy(), [0.0, 0.25])
+            np.testing.assert_allclose(model.particle_mass.numpy(), parent_masses)
+
 class TestAdmmGraphCapture(unittest.TestCase):
     """CUDA graph-capture smoke tests for dynamic proximal refresh."""
 
@@ -1206,6 +1245,13 @@ class TestAdmmBodyParticleAttachment(unittest.TestCase):
 
         self.assertLess(final_gap, 0.5 * initial_gap)
 
+        model.attachment_particle_body_stiffness.fill_(math.inf)
+        with self.assertRaisesRegex(ValueError, "Hard particle-body attachments require both endpoints.*SolverVBD"):
+            _make_semi_body_particle_solver(model)
+        model.attachment_particle_body_enabled.fill_(False)
+        disabled = _make_semi_body_particle_solver(model)
+        self.assertEqual(disabled._admm_rp_groups, [])
+
     def test_deprecated_helper_preserves_legacy_attachment_row(self):
         """Keep the deprecated ADMM helper compatible with its custom-row layout."""
         builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
@@ -1229,6 +1275,16 @@ class TestAdmmBodyParticleAttachment(unittest.TestCase):
             SolverCoupledADMM.BODY_PARTICLE_ATTACHMENT_FREQUENCY,
             model.custom_frequency_counts,
         )
+
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        body = builder.add_body(mass=1.0, inertia=wp.mat33(np.eye(3)))
+        particle = builder.add_particle(pos=(0.3, 0.0, 0.0), vel=wp.vec3(), mass=1.0, radius=0.0)
+        with self.assertWarns(DeprecationWarning):
+            SolverCoupledADMM.add_body_particle_attachment(builder, body, particle, stiffness=math.inf)
+        builder.color()
+        model = builder.finalize(device="cpu")
+        with self.assertRaisesRegex(ValueError, "is hard; use ModelBuilder.add_attachment_particle_body"):
+            _make_semi_body_particle_solver(model)
 
     def test_single_unsupported_entry_attachment_is_reported(self):
         """Warn when a same-entry solver cannot apply a model attachment."""
