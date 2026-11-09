@@ -499,6 +499,34 @@ class TestCalibrationGoals(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, match):
                     make_goal(**overrides).validate()
 
+    def test_goal_validation_rejects_invalid_capture_times(self):
+        """Reject nonfinite, negative, duplicate and descending capture times."""
+        timelines = (
+            [-0.1],
+            [-0.2],
+            [math.nan],
+            [math.inf],
+            [-math.inf],
+            [0.0, math.nan],
+            [0.0, 0.0],
+            [0.2, 0.1],
+        )
+        for frame_times in timelines:
+            with self.subTest(frame_times=frame_times):
+                goal = make_goal(frame_times=frame_times, masks=make_goal().masks * len(frame_times))
+                with self.assertRaisesRegex(ValueError, "frame_times"):
+                    goal.validate()
+
+    def test_goal_validation_keeps_zero_and_increasing_times(self):
+        """Accept time zero and include the final scored frame."""
+        for frame_times, expected_frames in (([0.0], 1), ([0.0, 0.2], 3)):
+            with self.subTest(frame_times=frame_times):
+                goal = make_goal(frame_times=frame_times, masks=make_goal().masks * len(frame_times))
+                goal.validate()
+                (group,) = group_goals([goal], fps=10, sim_substeps=2)
+                self.assertEqual(group.num_frames, expected_frames)
+                self.assertEqual(group.weights, [1.0])
+
 
 def write_mask(path, value, shape=(24, 32)):
     """Write a ``(height, width)`` mask whose pixels all equal ``value``."""

@@ -23,6 +23,7 @@ covering the latest frame of any view.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeAlias
@@ -109,9 +110,10 @@ class CableGoal:
         """Check that this goal can be rendered and scored.
 
         Raises:
-            ValueError: If the goal has no masks, a frame time per mask is
-                missing, the camera is underspecified, or a driven goal has no
-                data source or no :attr:`start_ns`.
+            ValueError: If the goal has no masks, its frame times are missing,
+                nonfinite, negative or non-increasing, the camera is
+                underspecified, or a driven goal has no data source or no
+                :attr:`start_ns`.
         """
         if not self.masks:
             raise ValueError(f"goal '{self.label}': no masks to score against.")
@@ -119,6 +121,16 @@ class CableGoal:
             raise ValueError(
                 f"goal '{self.label}': {len(self.frame_times)} frame time(s) but {len(self.masks)} mask(s)."
             )
+        for index, frame_time in enumerate(self.frame_times):
+            if not math.isfinite(frame_time) or frame_time < 0.0:
+                raise ValueError(
+                    f"goal '{self.label}': frame_times must be finite and nonnegative, got {frame_time}."
+                )
+            if index and frame_time <= self.frame_times[index - 1]:
+                raise ValueError(
+                    f"goal '{self.label}': frame_times must be strictly increasing, "
+                    f"got {self.frame_times[index - 1]} then {frame_time}."
+                )
         if self.camera_intrinsics is None:
             if self.render_size is None:
                 raise ValueError(f"goal '{self.label}': needs camera_intrinsics or render_size.")
