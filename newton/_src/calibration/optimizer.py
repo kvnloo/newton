@@ -88,19 +88,25 @@ class OptimizerCMA:
         than the start. After each iteration, the best loss and
         ``space.describe(vector)`` are logged at ``INFO`` level. The stop
         reason is the names of the CMA-ES stop criteria that were met.
+        When the space has a decoder, invalid proposals receive the maximum
+        finite loss and are not simulated. A wholly invalid population is
+        rejected rather than passed to CMA-ES.
 
         Args:
             objective: Object with ``evaluate(vectors)``, which returns one
                 finite value per decision vector.
             space: Object with ``dim``, ``x0()``, the search start, and
                 ``describe(vector)``, which returns the searched values as text.
+                If it also supplies ``decode(vector)``, proposals it rejects
+                with ``ValueError`` are assigned a finite penalty.
 
         Returns:
             The search outcome.
 
         Raises:
             ImportError: If the ``cma`` package is not installed.
-            ValueError: If the objective does not return one finite value per vector.
+            ValueError: If the start cannot be decoded, all proposals are
+                invalid, or the objective gives a non-finite value.
             RuntimeError: If the search stops before it scores the start.
         """
         try:
@@ -119,6 +125,10 @@ class OptimizerCMA:
         if self.seed is not None:
             opts["seed"] = self.seed
         x0 = list(space.x0())
+        decode = getattr(space, "decode", None)
+        if callable(decode):
+            # A bad start must fail, not become the reported best solution.
+            decode(x0)
         es = cma.CMAEvolutionStrategy(x0, self.sigma0, opts)
 
         best_x, best_loss, history, interrupted = None, float("inf"), [], False
@@ -133,7 +143,7 @@ class OptimizerCMA:
             record()
             while not es.stop():
                 solutions = es.ask()
-                losses = _evaluate(objective, solutions)
+                losses = _evaluate(objective, solutions, space=space)
                 es.tell(solutions, losses)
                 i = int(np.argmin(losses))
                 if losses[i] < best_loss:
@@ -180,9 +190,31 @@ def optimizer_from_spec(settings: Mapping[str, Any]) -> OptimizerCMA:
     return cls(**settings)
 
 
-def _evaluate(objective, vectors) -> np.ndarray:
-    """Evaluate ``vectors`` and require one finite value per vector."""
-    values = np.asarray(objective.evaluate(vectors), dtype=float)
-    if values.shape != (len(vectors),) or not np.all(np.isfinite(values)):
+def _evaluate(objective, vectors, *, space=None) -> np.ndarray:
+    """Score decodable proposals and penalize invalid ones without simulating them.
+
+    Only a space with ``decode(vector)`` opts into proposal preflight. An
+    invalid candidate receives the largest finite float so it cannot beat
+    any valid loss. Invalid objective scores remain errors.
+    """
+    indices = list(range(len(vectors)))
+    decode = getattr(space, "decode", None)
+    if callable(decode):
+        indices = []
+        for i, vector in enumerate(vectors):
+            try:
+                decode(vector)
+            except ValueError:
+                continue
+            indices.append(i)
+        if not indices:
+            raise ValueError("all optimizer proposals are invalid in the search space.")
+
+    values = np.asarray(objective.evaluate([vectors[i] for i in indices]), dtype=float)
+    if values.shape != (len(indices),) or not np.all(np.isfinite(values)):
         raise ValueError("objective must return one finite scalar per decision vector.")
-    return values
+    if len(indices) == len(vectors):
+        return values
+    losses = np.full(len(vectors), np.finfo(float).max, dtype=float)
+    losses[indices] = values
+    return losses

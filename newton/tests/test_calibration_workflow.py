@@ -12,7 +12,7 @@ import unittest
 import numpy as np
 
 from newton._src.calibration.calibrate import calibrate
-from newton._src.calibration.optimizer import OptimizerCMA, optimizer_from_spec
+from newton._src.calibration.optimizer import OptimizerCMA, _evaluate, optimizer_from_spec
 from newton._src.calibration.run_spec import CableRunSpec, CalibrationOutputSpec
 from newton._src.calibration.search_space import CableSearchSpace
 from newton._src.calibration.setup_spec import CableSetupSpec
@@ -229,6 +229,45 @@ class TestCalibrationRunSpec(unittest.TestCase):
         self.assertEqual(optimizer.to_dict(), {"kind": "cma", "seed": 5, "sigma0": 0.1, "popsize": 8, "maxiter": 2})
 
 
+class TestCalibrationInvalidPopulation(unittest.TestCase):
+    """CPU-only regressions for invalid log-space proposals."""
+
+    class StiffnessObjective:
+        """Score decodable candidates by distance from a 100 N·m/rad target."""
+
+        def __init__(self, space):
+            self.space = space
+            self.batches = []
+
+        def evaluate(self, vectors):
+            self.batches.append([list(vector) for vector in vectors])
+            return [abs(self.space.decode(vector).bend_stiffness - 100.0) for vector in vectors]
+
+    def test_mixed_population_penalizes_only_invalid_proposals(self):
+        space = CableSearchSpace(make_run_spec())
+        objective = self.StiffnessObjective(space)
+        losses = _evaluate(objective, [[2.0], [309.0], [-400.0], [1.0]], space=space)
+        self.assertEqual(objective.batches, [[[2.0], [1.0]]])
+        np.testing.assert_array_equal(losses, [0.0, np.finfo(float).max, np.finfo(float).max, 90.0])
+
+    def test_all_invalid_population_is_rejected_without_a_rollout(self):
+        space = CableSearchSpace(make_run_spec())
+        objective = self.StiffnessObjective(space)
+        with self.assertRaisesRegex(ValueError, "all optimizer proposals"):
+            _evaluate(objective, [[309.0], [-400.0]], space=space)
+        self.assertEqual(objective.batches, [])
+
+    def test_invalid_objective_score_is_not_reclassified_as_a_bad_proposal(self):
+        space = CableSearchSpace(make_run_spec())
+
+        class NonFiniteObjective:
+            def evaluate(self, vectors):
+                return [float("nan") for _ in vectors]
+
+        with self.assertRaisesRegex(ValueError, "finite scalar"):
+            _evaluate(NonFiniteObjective(), [[309.0], [2.0]], space=space)
+
+
 @unittest.skipUnless(importlib.util.find_spec("cma"), "requires newton[calibration]")
 class TestCalibrationOrchestration(unittest.TestCase):
     """:func:`calibrate` and the optimizer on a problem that is not a cable."""
@@ -287,6 +326,17 @@ class TestCalibrationOrchestration(unittest.TestCase):
         self.assertEqual(result.vector, [0.0, 0.0])
         self.assertEqual(result.loss, 0.0)
         self.assertEqual(result.stop_reason, "maxiter")
+
+    def test_nondecodable_start_fails_before_evaluation(self):
+        class InvalidStartSpace(CableSearchSpace):
+            def x0(self):
+                return [309.0]
+
+        problem = self.Problem()
+        problem.search_space = InvalidStartSpace(make_run_spec())
+        with self.assertRaisesRegex(ValueError, "bend_stiffness"):
+            calibrate(problem, optimizer=OptimizerCMA(seed=1, popsize=4, maxiter=2))
+        self.assertTrue(problem.closed)
 
     def test_problem_is_closed_when_evaluation_fails(self):
         """Verify a non-finite objective value stops the search and closes the problem."""
