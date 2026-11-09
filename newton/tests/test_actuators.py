@@ -2896,6 +2896,52 @@ class TestMotorDC(unittest.TestCase):
         )
 
 
+    def test_signed_net_current_and_floor_cpu(self):
+        """Preserve signed battery load, voltage floor, and nominal cap on CPU."""
+        with wp.ScopedDevice("cpu"):
+            builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+            slots = []
+            for _ in range(2):
+                link = builder.add_link(mass=1.0, inertia=_POINT_MASS_INERTIA)
+                joint = builder.add_joint_revolute(parent=-1, child=link, axis=newton.Axis.Z)
+                slots.append(
+                    builder.add_actuator(
+                        DrivePD,
+                        index=builder.joint_qd_start[joint],
+                        kp=1.0,
+                        output_space=DriveOutputSpace.DUTY,
+                        motor=(MotorDC, {"kt": 0.5, "resistance": 2.0, "supply_from_battery": True}),
+                    )
+                )
+            builder.add_battery(
+                BatteryConstantResistance,
+                slots,
+                nominal_voltage=12.0,
+                resistance=2.0,
+                min_voltage=4.0,
+            )
+            model = builder.finalize(device="cpu")
+            (battery,) = model.batteries
+            self.assertEqual(battery.num_batteries, 1)
+            np.testing.assert_array_equal(battery.actuators.numpy(), slots)
+            control = model.control()
+
+            for currents, expected_voltage in (
+                ((4.0, 1.0), 4.0),
+                ((3.0, -2.0), 10.0),
+                ((-3.0, 1.0), 12.0),
+            ):
+                with self.subTest(currents=currents):
+                    control.actuator_supply_current.assign(np.asarray(currents, dtype=np.float32))
+                    battery.step(control)
+                    np.testing.assert_allclose(
+                        control.actuator_supply_voltage.numpy(),
+                        [expected_voltage, expected_voltage],
+                        rtol=0.0,
+                        atol=1.0e-5,
+                    )
+
+
 # ---------------------------------------------------------------------------
 # 2. Delay
 # ---------------------------------------------------------------------------
