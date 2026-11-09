@@ -1994,6 +1994,107 @@ def _history_provenance_matched(device):
     )
 
 
+def _check_cpu_rigid_material_pair_mixing(device, torsional, rolling, pairs, expected_torsional, expected_rolling):
+    """Probe the production cold-start material cache, including one inactive slot."""
+    with wp.ScopedDevice(device):
+        count = len(pairs)
+        capacity = count + 1
+        shape_count = len(torsional)
+        contact_count = wp.array([count], dtype=int, device=device)
+        shape0 = wp.array([pair[0] for pair in pairs] + [0], dtype=int, device=device)
+        shape1 = wp.array([pair[1] for pair in pairs] + [0], dtype=int, device=device)
+        shape_ke = wp.array([100.0] * shape_count, dtype=float, device=device)
+        shape_kd = wp.array([2.0] * shape_count, dtype=float, device=device)
+        shape_mu = wp.array([0.25] * shape_count, dtype=float, device=device)
+        shape_torsional = wp.array(torsional, dtype=float, device=device)
+        shape_rolling = wp.array(rolling, dtype=float, device=device)
+
+        penalty = wp.full(capacity, -7.0, dtype=float, device=device)
+        material_kd = wp.full(capacity, -7.0, dtype=float, device=device)
+        material_mu = wp.full(capacity, -7.0, dtype=float, device=device)
+        material_torsional = wp.full(capacity, -7.0, dtype=float, device=device)
+        material_rolling = wp.full(capacity, -7.0, dtype=float, device=device)
+        material_ke = wp.full(capacity, -7.0, dtype=float, device=device)
+
+        wp.launch(
+            rigid_vbd_kernels.init_body_body_contact_materials,
+            dim=capacity,
+            inputs=[
+                contact_count,
+                shape0,
+                shape1,
+                shape_ke,
+                shape_kd,
+                shape_mu,
+                shape_torsional,
+                shape_rolling,
+                10.0,
+            ],
+            outputs=[
+                penalty,
+                material_kd,
+                material_mu,
+                material_torsional,
+                material_rolling,
+                material_ke,
+            ],
+            device=device,
+        )
+
+        np.testing.assert_allclose(
+            material_torsional.numpy()[:count], expected_torsional, rtol=1.0e-6, atol=1.0e-7
+        )
+        np.testing.assert_allclose(material_rolling.numpy()[:count], expected_rolling, rtol=1.0e-6, atol=1.0e-7)
+        for actual, expected in (
+            (penalty, 10.0),
+            (material_kd, 2.0),
+            (material_mu, 0.25),
+            (material_ke, 100.0),
+        ):
+            np.testing.assert_array_equal(actual.numpy()[:count], [expected] * count)
+        for output in (penalty, material_kd, material_mu, material_torsional, material_rolling, material_ke):
+            np.testing.assert_array_equal(output.numpy()[count:], [-7.0])
+
+
+def _rigid_contact_material_pair_asymmetric_cpu(test, device):
+    """Geometric, not arithmetic, mixing for two unlike positive materials."""
+    del test
+    _check_cpu_rigid_material_pair_mixing(
+        device,
+        torsional=[0.04, 0.09],
+        rolling=[0.09, 0.04],
+        pairs=[(0, 1)],
+        expected_torsional=[0.06],
+        expected_rolling=[0.06],
+    )
+
+
+def _rigid_contact_material_pair_zero_channels_cpu(test, device):
+    """A zero on either material silences only its corresponding angular channel."""
+    del test
+    _check_cpu_rigid_material_pair_mixing(
+        device,
+        torsional=[0.0, 0.09, 0.04],
+        rolling=[0.04, 0.0, 0.09],
+        pairs=[(0, 2), (1, 2)],
+        expected_torsional=[0.0, 0.06],
+        expected_rolling=[0.06, 0.0],
+    )
+
+
+def _rigid_contact_material_pair_reversed_cpu(test, device):
+    """Swapping shape order preserves the pair mix across independent contacts."""
+    del test
+    _check_cpu_rigid_material_pair_mixing(
+        device,
+        torsional=[0.01, 0.04, 0.09],
+        rolling=[0.04, 0.09, 0.16],
+        pairs=[(0, 2), (2, 0), (1, 2)],
+        expected_torsional=[0.03, 0.03, 0.06],
+        expected_rolling=[0.08, 0.08, 0.12],
+    )
+
+
 def _rigid_contact_history_restore_from_match_index(test, device):
     """Verify legacy hard contact preserves its full-vector warm start."""
     with wp.ScopedDevice(device):
@@ -7503,6 +7604,24 @@ add_function_test(
 )
 add_function_test(
     TestSolverVBD, "test_contact_barrier_c2_at_tiny_radius", test_contact_barrier_c2_at_tiny_radius, devices=devices
+)
+add_function_test(
+    TestSolverVBD,
+    "test_rigid_contact_material_pair_asymmetric_cpu",
+    _rigid_contact_material_pair_asymmetric_cpu,
+    devices=cpu_devices,
+)
+add_function_test(
+    TestSolverVBD,
+    "test_rigid_contact_material_pair_zero_channels_cpu",
+    _rigid_contact_material_pair_zero_channels_cpu,
+    devices=cpu_devices,
+)
+add_function_test(
+    TestSolverVBD,
+    "test_rigid_contact_material_pair_reversed_cpu",
+    _rigid_contact_material_pair_reversed_cpu,
+    devices=cpu_devices,
 )
 add_function_test(
     TestSolverVBD,
