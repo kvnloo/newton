@@ -199,6 +199,37 @@ class TestCalibrationRunSpec(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "twist_damping"):
             space.decode([-400.0])
 
+    def test_decode_preserves_positive_subnormal_scalars(self):
+        """Keep the last two binary64 subnormal powers in all four search slots."""
+        smallest = float.fromhex("0x0.0000000000001p-1022")
+        cases = (
+            ("bend_stiffness", {}),
+            ("twist_stiffness", {"opt_bend_stiffness": False, "twist_stiffness_mode": "fit"}),
+            ("bend_damping", {"opt_bend_stiffness": False, "opt_bend_damping": True}),
+            ("twist_damping", {"opt_bend_stiffness": False, "twist_damping_mode": "fit"}),
+        )
+        for name, settings in cases:
+            with self.subTest(scalar=name):
+                space = CableSearchSpace(make_run_spec(**settings))
+                self.assertEqual(space.dim, 1)
+                for exponent, expected in ((-323.0, 2.0 * smallest), (-323.3, smallest)):
+                    with self.subTest(exponent=exponent):
+                        value = getattr(space.decode([exponent]), name)
+                        self.assertEqual(value, expected)
+                        self.assertGreater(value, 0.0)
+                        self.assertLess(value, np.finfo(float).tiny)
+                with self.assertRaisesRegex(ValueError, name):
+                    space.decode([-324.0])
+
+    def test_decode_retains_subnormal_coupled_twist_scalars(self):
+        """Coupled twist coefficients must inherit the tiny positive bend values."""
+        space = CableSearchSpace(make_run_spec(opt_bend_damping=True))
+        candidate = space.decode([-323.0, -323.3])
+        self.assertEqual(candidate.bend_stiffness, candidate.twist_stiffness)
+        self.assertEqual(candidate.bend_damping, candidate.twist_damping)
+        self.assertGreater(candidate.twist_stiffness, 0.0)
+        self.assertGreater(candidate.twist_damping, 0.0)
+
     def test_non_positive_search_start_is_refused(self):
         """Verify a log-space search refuses a start value that is not positive."""
         for settings in (
@@ -249,6 +280,14 @@ class TestCalibrationInvalidPopulation(unittest.TestCase):
         losses = _evaluate(objective, [[2.0], [309.0], [-400.0], [1.0]], space=space)
         self.assertEqual(objective.batches, [[[2.0], [1.0]]])
         np.testing.assert_array_equal(losses, [0.0, np.finfo(float).max, np.finfo(float).max, 90.0])
+
+    def test_subnormal_proposals_are_scored_without_penalty(self):
+        """A representable subnormal is scored while a zero decode is rejected."""
+        space = CableSearchSpace(make_run_spec())
+        objective = self.StiffnessObjective(space)
+        losses = _evaluate(objective, [[-323.0], [-324.0], [2.0]], space=space)
+        self.assertEqual(objective.batches, [[[-323.0], [2.0]]])
+        np.testing.assert_array_equal(losses, [100.0, np.finfo(float).max, 0.0])
 
     def test_all_invalid_population_is_rejected_without_a_rollout(self):
         space = CableSearchSpace(make_run_spec())

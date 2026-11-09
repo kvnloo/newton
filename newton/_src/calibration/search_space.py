@@ -117,6 +117,9 @@ class CableSearchSpace:
     def decode(self, x: Sequence[float]) -> CableCandidate:
         """Return the candidate that a decision vector describes.
 
+        Positive binary64 subnormals are retained: they are representable
+        coefficients, unlike values that round to zero after exponentiation.
+
         Raises:
             ValueError: If ``x`` has invalid dimensions or non-finite values, or a
                 searched scalar cannot be represented as a positive finite float.
