@@ -2617,9 +2617,13 @@ def parse_mjcf(
             ball_damping = default_joint_damping
             ball_stiffness = builder.default_joint_cfg.stiffness
             joints = body.findall("joint")
-            for i, joint in enumerate(joints):
-                joint_attrib = resolve_element_attrib(joint, "joint", defaults)
-
+            joint_attributes = [resolve_element_attrib(joint, "joint", defaults) for joint in joints]
+            joint_types = [attrib.get("type", "hinge") for attrib in joint_attributes]
+            if "ball" in joint_types and len(joint_types) > 1 and joint_types != ["slide", "slide", "slide", "ball"]:
+                raise ValueError(
+                    f"MJCF body '{body_label_path}' requires three canonical XYZ slide joints followed by a ball joint."
+                )
+            for i, joint_attrib in enumerate(joint_attributes):
                 # default to hinge if not specified
                 joint_type_str = joint_attrib.get("type", "hinge")
 
@@ -2636,6 +2640,18 @@ def parse_mjcf(
                     break
                 if joint_type_str == "ball":
                     joint_type = JointType.BALL
+                    if len(joint_attributes) > 1:
+                        if len(linear_axes) != 3 or not np.allclose(
+                            [[float(axis.axis[d]) for d in range(3)] for axis in linear_axes],
+                            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                            rtol=0.0,
+                            atol=1.0e-6,
+                        ):
+                            raise ValueError(
+                                f"MJCF body '{body_label_path}' requires three canonical XYZ slide joints "
+                                "followed by a ball joint."
+                            )
+                        joint_type = JointType.FREE
                     warn_invalid_joint_solreflimit(joint_attrib)
                     dof_attr = parse_custom_attributes(
                         joint_attrib,
@@ -2663,6 +2679,19 @@ def parse_mjcf(
                     ball_friction = parse_float(joint_attrib, "frictionloss", 0.0)
                     ball_damping = parse_float(joint_attrib, "damping", default_joint_damping)
                     ball_stiffness = parse_float(joint_attrib, "stiffness", builder.default_joint_cfg.stiffness)
+                    if joint_type == JointType.FREE:
+                        # Carry the ball's passive properties through the combined six-DOF joint.
+                        angular_axes.extend(
+                            ModelBuilder.JointDofConfig(
+                                axis=axis,
+                                armature=joint_armature[-1],
+                                friction=ball_friction,
+                                damping=ball_damping,
+                                stiffness=ball_stiffness,
+                                actuator_mode=JointTargetMode.NONE,
+                            )
+                            for axis in (Axis.X, Axis.Y, Axis.Z)
+                        )
                     break
                 is_angular = joint_type_str == "hinge"
                 is_linear = joint_type_str == "slide"
@@ -2877,12 +2906,12 @@ def parse_mjcf(
                 joint_name = [f"{body_name}_joint"]
             joint_label_name = "_".join(joint_name)
             joint_label = f"{body_label_path}/{joint_label_name}"
-            if joint_type == JointType.FREE:
-                if parent != -1:
-                    raise ValueError(
-                        f"Free joints must have the world body as parent; "
-                        f"joint '{joint_label}' on body '{body_label_path}' has parent body index {parent}."
-                    )
+            if joint_type == JointType.FREE and parent != -1:
+                raise ValueError(
+                    f"Free joints must have the world body as parent; "
+                    f"joint '{joint_label}' on body '{body_label_path}' has parent body index {parent}."
+                )
+            if joint_type == JointType.FREE and not linear_axes:
                 joint_idx = builder.add_joint_free(
                     link,
                     label=joint_label,
@@ -2935,6 +2964,8 @@ def parse_mjcf(
                     child_xform=wp.transform(joint_pos, wp.quat_identity()),
                     custom_attributes=joint_custom_attributes | dof_custom_attributes,
                 )
+                if joint_type == JointType.FREE:
+                    builder._init_joint_q_from_body_poses(joint_idx, parent, link)
                 joint_indices.append(joint_idx)
 
                 # Populate per-MJCF-joint DOF mapping for actuator resolution
