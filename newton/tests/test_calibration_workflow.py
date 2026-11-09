@@ -308,6 +308,105 @@ class TestCalibrationInvalidPopulation(unittest.TestCase):
 
 
 @unittest.skipUnless(importlib.util.find_spec("cma"), "requires newton[calibration]")
+class TestCalibrationCMAInvalidGenerations(unittest.TestCase):
+    """Check invalid candidates with actual seeded pycma ask/tell generations."""
+
+    class BoundedSpace(CableSearchSpace):
+        """Apply a finite log-space trust radius around a decodable start."""
+
+        def __init__(self, spec, *, radius):
+            super().__init__(spec)
+            self.radius = radius
+
+        def decode(self, vector):
+            offset = np.asarray(vector, dtype=float) - np.asarray(self.x0(), dtype=float)
+            if float(np.linalg.norm(offset)) > self.radius:
+                raise ValueError("calibration proposal exceeds the allowed log-space radius.")
+            return super().decode(vector)
+
+    @staticmethod
+    def _first_generation():
+        """Build the same seeded first population as OptimizerCMA, without mocks."""
+        import cma  # noqa: PLC0415 -- optional calibration dependency
+
+        settings = OptimizerCMA(seed=19, sigma0=0.4, maxiter=1, popsize=8)
+        spec = make_run_spec(opt_bend_damping=True)
+        start = CableSearchSpace(spec).x0()
+        strategy = cma.CMAEvolutionStrategy(
+            start,
+            settings.sigma0,
+            {
+                "maxiter": settings.maxiter,
+                "popsize": settings.popsize,
+                "tolconditioncov": 1e12,
+                "verbose": -9,
+                "verb_log": 0,
+                "randn": np.random.RandomState(settings.seed).randn,
+                "seed": settings.seed,
+            },
+        )
+        proposals = strategy.ask()
+        distances = np.linalg.norm(np.asarray(proposals) - np.asarray(start), axis=1)
+        return settings, spec, strategy, proposals, distances
+
+    def test_max_finite_penalty_survives_seeded_cma_tell(self):
+        """Four scored candidates and four invalid ones reach real CMA tell."""
+        _, spec, strategy, proposals, distances = self._first_generation()
+        ordered = sorted(distances)
+        self.assertGreater(ordered[4], ordered[3])
+        radius = float((ordered[3] + ordered[4]) / 2)
+        space = self.BoundedSpace(spec, radius=radius)
+        objective = TestCalibrationInvalidPopulation.StiffnessObjective(space)
+
+        losses = _evaluate(objective, proposals, space=space)
+        self.assertEqual(len(objective.batches), 1)
+        self.assertEqual(len(objective.batches[0]), 4)
+        self.assertEqual(int(np.count_nonzero(losses == np.finfo(float).max)), 4)
+        self.assertTrue(np.all(np.isfinite(losses)))
+
+        strategy.tell(proposals, losses)
+        self.assertTrue(np.all(np.isfinite(strategy.mean)))
+        self.assertTrue(np.isfinite(strategy.sigma))
+        self.assertTrue(np.isfinite(strategy.result.fbest))
+
+    def test_seeded_optimizer_filters_mixed_generation_and_keeps_start(self):
+        """The real optimizer passes only in-radius proposals to the objective."""
+        settings, spec, _, proposals, distances = self._first_generation()
+        ordered = sorted(distances)
+        radius = float((ordered[3] + ordered[4]) / 2)
+        space = self.BoundedSpace(spec, radius=radius)
+        objective = TestCalibrationInvalidPopulation.StiffnessObjective(space)
+
+        outcome = settings.minimize(objective, space)
+        self.assertEqual(len(objective.batches), 2)
+        self.assertEqual(objective.batches[0], [space.x0()])
+        np.testing.assert_array_equal(
+            objective.batches[1], np.asarray(proposals)[distances <= radius]
+        )
+        self.assertEqual(len(objective.batches[1]), 4)
+        self.assertEqual(outcome.iterations, 1)
+        self.assertEqual(outcome.stop_reason, "maxiter")
+        self.assertEqual(outcome.history, [(0.0, space.x0()), (0.0, space.x0())])
+        self.assertEqual(outcome.vector, space.x0())
+
+        replay = settings.minimize(
+            TestCalibrationInvalidPopulation.StiffnessObjective(space), space
+        )
+        self.assertEqual(replay, outcome)
+
+    def test_seeded_all_invalid_generation_stops_after_scoring_start(self):
+        """A bounded real CMA generation must not trigger invalid rollouts."""
+        settings, spec, _, _, distances = self._first_generation()
+        self.assertGreater(float(np.min(distances)), 0.0)
+        space = self.BoundedSpace(spec, radius=float(np.min(distances)) / 2)
+        objective = TestCalibrationInvalidPopulation.StiffnessObjective(space)
+
+        with self.assertRaisesRegex(ValueError, "all optimizer proposals"):
+            settings.minimize(objective, space)
+        self.assertEqual(objective.batches, [[space.x0()]])
+
+
+@unittest.skipUnless(importlib.util.find_spec("cma"), "requires newton[calibration]")
 class TestCalibrationOrchestration(unittest.TestCase):
     """:func:`calibrate` and the optimizer on a problem that is not a cable."""
 
