@@ -161,6 +161,44 @@ class TestCalibrationRunSpec(unittest.TestCase):
         self.assertEqual(coupled.decode([2.5]).twist_stiffness, 10.0**2.5)
         self.assertEqual(coupled.decode([2.5]).twist_damping, 0.25)
 
+    def test_decode_rejects_overflowing_log_stiffness(self):
+        """Reject a finite log stiffness that exceeds the float range."""
+        space = CableSearchSpace(make_run_spec())
+        self.assertEqual(space.dim, 1)
+        self.assertEqual(space.decode([2.0]).bend_stiffness, 100.0)
+        with self.assertRaisesRegex(ValueError, "bend_stiffness"):
+            space.decode([309.0])
+
+    def test_decode_rejects_underflowing_log_damping(self):
+        """Reject a searched damping coefficient that decodes to zero."""
+        space = CableSearchSpace(
+            make_run_spec(opt_bend_stiffness=False, opt_bend_damping=True)
+        )
+        self.assertEqual(space.dim, 1)
+        self.assertAlmostEqual(space.decode([-2.0]).bend_damping, 0.01)
+        with self.assertRaisesRegex(ValueError, "bend_damping"):
+            space.decode([-400.0])
+
+    def test_decode_rejects_overflowing_log_twist_stiffness(self):
+        """Reject an independently fitted twist stiffness beyond the float range."""
+        space = CableSearchSpace(
+            make_run_spec(opt_bend_stiffness=False, twist_stiffness_mode="fit", init_twist_stiffness=7.0)
+        )
+        self.assertEqual(space.dim, 1)
+        self.assertEqual(space.decode([2.0]).twist_stiffness, 100.0)
+        with self.assertRaisesRegex(ValueError, "twist_stiffness"):
+            space.decode([309.0])
+
+    def test_decode_rejects_underflowing_log_twist_damping(self):
+        """Reject independently fitted twist damping that decodes to zero."""
+        space = CableSearchSpace(
+            make_run_spec(opt_bend_stiffness=False, twist_damping_mode="fit", init_twist_damping=0.25)
+        )
+        self.assertEqual(space.dim, 1)
+        self.assertAlmostEqual(space.decode([-2.0]).twist_damping, 0.01)
+        with self.assertRaisesRegex(ValueError, "twist_damping"):
+            space.decode([-400.0])
+
     def test_non_positive_search_start_is_refused(self):
         """Verify a log-space search refuses a start value that is not positive."""
         for settings in (

@@ -118,7 +118,8 @@ class CableSearchSpace:
         """Return the candidate that a decision vector describes.
 
         Raises:
-            ValueError: If ``x`` does not have :attr:`dim` finite values.
+            ValueError: If ``x`` has invalid dimensions or non-finite values, or a
+                searched scalar cannot be represented as a positive finite float.
         """
         if len(x) != self.dim or not all(math.isfinite(float(v)) for v in x):
             raise ValueError(f"expected {self.dim} finite decision variables.")
@@ -131,20 +132,31 @@ class CableSearchSpace:
         else:
             angles = [tuple(a) for a in self.base_angles]
 
-        bend_stiffness = 10.0 ** float(x[off["bend_stiffness"]]) if s.opt_bend_stiffness else self.init_bend_stiffness
-        bend_damping = 10.0 ** float(x[off["bend_damping"]]) if s.opt_bend_damping else self.init_bend_damping
+        def decode_log_scalar(name: str) -> float:
+            # Optimizer proposals are finite in log space but may not be
+            # representable as positive, finite physical coefficients.
+            try:
+                value = 10.0 ** float(x[off[name]])
+            except OverflowError as exc:
+                raise ValueError(f"{name} does not decode to a positive finite float.") from exc
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} does not decode to a positive finite float.")
+            return value
+
+        bend_stiffness = decode_log_scalar("bend_stiffness") if s.opt_bend_stiffness else self.init_bend_stiffness
+        bend_damping = decode_log_scalar("bend_damping") if s.opt_bend_damping else self.init_bend_damping
 
         if s.twist_stiffness_mode == "coupled":
             twist_stiffness = bend_stiffness
         elif s.twist_stiffness_mode == "fit":
-            twist_stiffness = 10.0 ** float(x[off["twist_stiffness"]])
+            twist_stiffness = decode_log_scalar("twist_stiffness")
         else:
             twist_stiffness = float(s.twist_stiffness_mode)
 
         if s.twist_damping_mode == "coupled":
             twist_damping = bend_damping
         elif s.twist_damping_mode == "fit":
-            twist_damping = 10.0 ** float(x[off["twist_damping"]])
+            twist_damping = decode_log_scalar("twist_damping")
         else:
             twist_damping = float(s.twist_damping_mode)
 
