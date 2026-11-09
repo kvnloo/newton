@@ -5,9 +5,10 @@
 
 import inspect
 import os
+import sys
+import threading
 from contextlib import redirect_stdout
 from functools import cache
-from io import StringIO
 from pathlib import Path
 
 import warp as wp
@@ -57,11 +58,33 @@ HAS_NATIVE_TILE_MATMUL_LEFT_TRANSPOSE_UPDATE = (
 )
 
 
+class _DiagnosticsStdout:
+    """Hide probe-thread prints while forwarding other threads' stdout."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._thread_id = threading.get_ident()
+
+    def write(self, text):
+        if threading.get_ident() == self._thread_id:
+            return len(text)
+        return self._stream.write(text)
+
+    def flush(self):
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+_diagnostics_probe_lock = threading.Lock()
+
+
 @cache
 def _get_libmathdx_version() -> str:
     """Read libmathdx from Warp's public diagnostics once without printing them."""
     try:
-        with redirect_stdout(StringIO()):
+        with _diagnostics_probe_lock, redirect_stdout(_DiagnosticsStdout(sys.stdout)):
             return wp.print_diagnostics().get("libmathdx") or ""
     except Exception:
         return ""

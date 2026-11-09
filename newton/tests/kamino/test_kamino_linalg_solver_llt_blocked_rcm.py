@@ -4,6 +4,7 @@
 """Unit tests for the LLTBlockedRCMSolver from linalg/linear.py"""
 
 import logging
+import threading
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -13,6 +14,7 @@ import numpy as np
 import warp as wp
 
 from newton._src.solvers.kamino._src.linalg.core import DenseLinearOperatorData, DenseSquareMultiLinearInfo
+from newton._src.solvers.kamino._src.linalg.factorize import _tile_builtins as tile_builtins
 from newton._src.solvers.kamino._src.linalg.factorize import rcm_batch
 from newton._src.solvers.kamino._src.linalg.factorize._tile_builtins import (
     HAS_NATIVE_TILE_MATMUL_LEFT_TRANSPOSE_UPDATE,
@@ -32,6 +34,82 @@ logger = logging.getLogger(__name__)
 ###
 # Tests
 ###
+
+
+class TestTileMatmulSelectionCPU(unittest.TestCase):
+    """Host-only tests for version selection and diagnostic stdout isolation."""
+
+    def tearDown(self):
+        _get_libmathdx_version.cache_clear()
+        super().tearDown()
+
+    def test_version_gate_and_gemm_opt_out_cpu(self):
+        """Retain the native path below 0.4.2 or when MathDx GEMM is disabled."""
+        cases = (
+            ("0.4.1", True, True),
+            ("0.4.2", True, False),
+            ("0.4.2", False, True),
+        )
+        for version, gemm_enabled, expected_native in cases:
+            with self.subTest(version=version, gemm_enabled=gemm_enabled):
+                def diagnostics():
+                    print("Warp diagnostics")
+                    return {"libmathdx": version}
+
+                with (
+                    patch.object(tile_builtins, "HAS_NATIVE_TILE_MATMUL_LEFT_TRANSPOSE_UPDATE", True),
+                    patch.object(wp.config, "enable_mathdx_gemm", gemm_enabled, create=True),
+                    patch.object(wp, "print_diagnostics", side_effect=diagnostics) as probe,
+                    redirect_stdout(StringIO()) as output,
+                ):
+                    _get_libmathdx_version.cache_clear()
+                    self.assertIs(use_native_tile_matmul_left_transpose_update(), expected_native)
+
+                self.assertEqual(probe.call_count, int(gemm_enabled))
+                self.assertEqual(output.getvalue(), "")
+
+    def test_diagnostics_probe_preserves_other_thread_stdout_cpu(self):
+        """A concurrent application print must not be swallowed by diagnostics."""
+        entered = threading.Event()
+        release = threading.Event()
+        output = StringIO()
+        results = []
+        errors = []
+
+        def diagnostics():
+            print("Warp diagnostics begin")
+            entered.set()
+            if not release.wait(timeout=10):
+                raise AssertionError("Timed out waiting to release diagnostics")
+            print("Warp diagnostics end")
+            return {"libmathdx": "0.4.2"}
+
+        def trace_selector():
+            try:
+                results.append(use_native_tile_matmul_left_transpose_update())
+            except Exception as exc:
+                errors.append(exc)
+
+        with (
+            patch.object(tile_builtins, "HAS_NATIVE_TILE_MATMUL_LEFT_TRANSPOSE_UPDATE", True),
+            patch.object(wp.config, "enable_mathdx_gemm", True, create=True),
+            patch.object(wp, "print_diagnostics", side_effect=diagnostics),
+        ):
+            _get_libmathdx_version.cache_clear()
+            with redirect_stdout(output):
+                worker = threading.Thread(target=trace_selector, daemon=True)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(timeout=10), "Diagnostics did not start")
+                    print("INDEPENDENT_APPLICATION_OUTPUT")
+                finally:
+                    release.set()
+                    worker.join(timeout=10)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [False])
+        self.assertEqual(output.getvalue(), "INDEPENDENT_APPLICATION_OUTPUT\n")
 
 
 class TestLinAlgLLTBlockedRCMSolver(unittest.TestCase):
