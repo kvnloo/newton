@@ -444,5 +444,47 @@ class TestCalibrationCableProblem(unittest.TestCase):
             self.assertTrue((output / "goal_seq_camera_mask/frame_001.png").exists())
 
 
+class TestCalibrationTraceLabelPaths(unittest.TestCase):
+    """Trace filenames reject unsafe labels without restricting the evidence bundle."""
+
+    def test_trace_preflight_rejects_separator_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_bundle(root)
+            for label in ("cam/front", "../outside", r"cam\back"):
+                with self.subTest(label=label):
+                    bundle.recordings[0].label = label
+                    bundle.validate()  # Preserve the no-trace bundle contract.
+                    with self.assertRaisesRegex(ValueError, "label"):
+                        CableTraceWriter(str(root / "trace"), bundle, str(root))
+                    self.assertFalse((root / "trace").exists())
+
+    def test_safe_label_writes_a_traced_iteration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_bundle(root)
+            bundle.recordings[0].label = "cam_01"
+            bundle.validate()
+            rgb = np.zeros((16, 16, 4), dtype=np.uint8)
+            mask = np.zeros((16, 16), dtype=np.uint8)
+            mask[4:12, 7:9] = 255
+            view = CableTraceView(
+                label="cam_01",
+                crop=[0, 0, 16, 16],
+                weight=1.0,
+                loss=0.25,
+                frames=[rgb],
+                masks=[mask],
+                goal_indices=[0],
+                frame_losses=[(0.0, 0.25)],
+            )
+            out = root / "trace"
+            CableTraceWriter(str(out), bundle, str(root)).write(2, [view], 0.25)
+            self.assertTrue((out / "goal_cam_01.png").is_file())
+            self.assertTrue((out / "iter_002_cam_01/frame_000.png").is_file())
+            self.assertTrue((out / "iter_002_cam_01_simmask/frame_000.png").is_file())
+            self.assertEqual((out / "mean_fit.dat").read_text().splitlines()[-1], "2 0.25")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

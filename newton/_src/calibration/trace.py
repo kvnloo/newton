@@ -81,6 +81,10 @@ class CableTraceWriter:
     def __init__(self, output_dir: str, bundle, bundle_dir: str):
         self.output_dir = output_dir
         self.bundle_dir = bundle_dir
+        # Trace labels become filename components; reject separators before a fit.
+        for recording in bundle.recordings:
+            if "/" in recording.label or "\\" in recording.label:
+                raise ValueError(f"trace label {recording.label!r} must not contain path separators.")
         self.recordings = {r.label: r for r in bundle.recordings}
         self._goals_written = False
 
