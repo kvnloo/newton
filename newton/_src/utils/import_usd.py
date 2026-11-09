@@ -1149,6 +1149,26 @@ def parse_usd(
         path = str(prim.GetPath())
         _warn_mirrored_body_transform(prim, path, xform_cache)
 
+        # These PhysX body fields are only consumed by registered Steel attributes.
+        ignored_damping = []
+        for name, steel_attribute in (
+            ("physxRigidBody:linearDamping", "steel:rigid_body_linear_damping"),
+            ("physxRigidBody:angularDamping", "steel:rigid_body_angular_damping"),
+        ):
+            if builder.has_custom_attribute(steel_attribute):
+                continue
+            attribute = prim.GetAttribute(name)
+            if attribute and attribute.HasAuthoredValue():
+                value = attribute.Get()
+                if value is not None and value != 0.0:
+                    ignored_damping.append(f"{name}={value}")
+        if ignored_damping:
+            logger.warning(
+                "Rigid body %s ignores authored PhysX damping (%s); register SolverSteel custom attributes before import to preserve it",
+                path,
+                ", ".join(ignored_damping),
+            )
+
         is_kinematic = rigid_body_desc.kinematicBody
         linear_velocity = wp.transform_vector(origin, wp.vec3(*rigid_body_desc.linearVelocity))
         angular_velocity = wp.transform_vector(
