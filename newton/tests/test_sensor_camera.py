@@ -1761,6 +1761,64 @@ class TestSensorCamera(unittest.TestCase):
         np.testing.assert_allclose(color, [expected] * 3, atol=1e-4)
 
 
+    def test_gaussian_bvh_cutoff_keeps_grazing_splat(self) -> None:
+        """Sort faint grazing splats by ray distance, even if their BVH boxes start later."""
+        theta = math.radians(8.0)
+        ray = np.array([-math.sin(theta), 0.0, -math.cos(theta)])
+        normal = np.array([math.cos(theta), 0.0, -math.sin(theta)])
+        opacity_a = 0.3
+        miss = 1.6
+        center_a = 3.0 * ray - 0.5 * miss * normal
+
+        # A sorts at 3 m but its opacity-dependent BVH box starts later.
+        half_a = 0.5 * math.sqrt(2.0 * math.log(opacity_a / 0.1))
+        entry_a = max(min((center_a[i] - half_a) / ray[i], (center_a[i] + half_a) / ray[i]) for i in (0, 2))
+        key_b = 0.5 * (3.0 + entry_a)
+        self.assertGreater(key_b, 3.0)
+        self.assertLess(key_b, entry_a)
+
+        camera_pose = wp.array(
+            [wp.transformf(wp.vec3f(0.0), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), theta))],
+            dtype=wp.transformf,
+            device="cpu",
+        )
+        rays = self._rays(1, 1)
+        alpha_a = opacity_a * math.exp(-0.5 * miss * miss)
+        for mode, opacity_b, capacities in (
+            (SensorCamera.GaussianRenderMode.FAST, 1.0, (2,)),
+            (SensorCamera.GaussianRenderMode.QUALITY, 1.0, (1, 2)),
+            (SensorCamera.GaussianRenderMode.QUALITY, 0.5, (1, 2)),
+        ):
+            gaussian = newton.Gaussian(
+                positions=np.array([center_a, key_b * ray], dtype=np.float32),
+                scales=np.array([[0.5] * 3, [0.05] * 3], dtype=np.float32),
+                opacities=np.array([opacity_a, opacity_b], dtype=np.float32),
+                sh_coeffs=(np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32) - 0.5) / SH_C0,
+                sh_color_space=newton.utils.ColorSpace.LINEAR,
+            )
+            builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+            builder.add_shape_gaussian(body=-1, gaussian=gaussian)
+            model = builder.finalize(device="cpu")
+            camera = SensorCamera(model)
+            state = model.state()
+            hdr = camera.allocate_image_color_hdr(1, 1, 1)
+
+            # A contributes alpha_a red; B contributes opacity_b green through A.
+            total_alpha = 1.0 - (1.0 - alpha_a) * (1.0 - opacity_b)
+            expected = [alpha_a / total_alpha, (1.0 - alpha_a) * opacity_b / total_alpha, 0.0]
+            for capacity in capacities:
+                with self.subTest(mode=mode, opacity_b=opacity_b, capacity=capacity):
+                    camera.update(
+                        state,
+                        camera_pose,
+                        rays,
+                        hdr_color_image=hdr,
+                        render_config=SensorCamera.RenderConfig(
+                            gaussians_mode=mode, gaussians_max_num_hits=capacity
+                        ),
+                    )
+                    np.testing.assert_allclose(hdr.numpy().reshape(3), expected, atol=2e-3, rtol=0)
+
 class TestSensorCameraDeformable(unittest.TestCase):
     """Render native visual meshes without USD or a viewer window."""
 
