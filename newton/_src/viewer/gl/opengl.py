@@ -1210,6 +1210,12 @@ class RendererGL:
         try:
             import pyglet
 
+            if int(pyglet.version.split(".", 1)[0]) >= 3:
+                raise RuntimeError(
+                    f"ViewerGL requires pyglet >=2.1.6,<3; found pyglet {pyglet.version}. "
+                    "Install a compatible version with 'uv sync --extra examples'."
+                )
+
             # disable error checking for performance
             pyglet.options["debug_gl"] = False
 
@@ -1220,7 +1226,7 @@ class RendererGL:
             RendererGL.initialize_gl()
             gl = RendererGL.gl
         except ImportError as e:
-            raise Exception("OpenGLRenderer requires pyglet (version >= 2.0) to be installed.") from e
+            raise ImportError("ViewerGL requires pyglet >=2.1.6,<3; install with 'uv sync --extra examples'.") from e
 
         # pyglet's shadow context, if any, shows the driver's version before we open a
         # window; on OpenGL 1.1 drivers, creating windows can raise spurious GL errors.
