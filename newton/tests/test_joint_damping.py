@@ -11,7 +11,41 @@ from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices
 
 
 class TestJointDamping(unittest.TestCase):
-    pass
+    def test_featherstone_ball_damping_uses_configured_axes_cpu(self):
+        """Apply anisotropic BALL damping along the configured angular axes on CPU."""
+        cases = (
+            ((newton.Axis.X, newton.Axis.Y, newton.Axis.Z), 0.98),
+            ((newton.Axis.Y, newton.Axis.X, newton.Axis.Z), 0.96),
+        )
+        for axes, expected_x in cases:
+            with self.subTest(axes=axes):
+                builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0), up_axis=newton.Axis.Y)
+                body = builder.add_link(
+                    mass=1.0,
+                    inertia=wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+                    lock_inertia=True,
+                )
+                joint = builder.add_joint(
+                    newton.JointType.BALL,
+                    parent=-1,
+                    child=body,
+                    angular_axes=[
+                        newton.ModelBuilder.JointDofConfig(axis=axis, damping=damping, armature=0.0, friction=0.0)
+                        for axis, damping in zip(axes, (2.0, 4.0, 0.0), strict=True)
+                    ],
+                )
+                builder.add_articulation([joint])
+                builder.joint_qd[0] = 1.0
+                model = builder.finalize(device="cpu")
+
+                state_in, state_out = model.state(), model.state()
+                newton.eval_fk(model, model.joint_q, model.joint_qd, state_in)
+                solver = newton.solvers.SolverFeatherstone(model, angular_damping=0.0)
+                solver.step(state_in, state_out, model.control(), None, 0.01)
+
+                np.testing.assert_allclose(
+                    state_out.joint_qd.numpy()[:3], [expected_x, 0.0, 0.0], rtol=0.0, atol=1.0e-5
+                )
 
 
 def _build_revolute_model(device, damping: float):

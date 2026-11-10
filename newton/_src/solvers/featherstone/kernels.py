@@ -528,6 +528,7 @@ def jcalc_tau(
     joint_damping: wp.array[float],
     joint_stiffness: wp.array[float],
     joint_rest_q: wp.array[float],
+    joint_axis: wp.array[wp.vec3],
     joint_S_s: wp.array[wp.spatial_vector],
     joint_q: wp.array[float],
     joint_qd: wp.array[float],
@@ -549,16 +550,18 @@ def jcalc_tau(
         # target_ke = joint_target_ke[dof_start]
         # target_kd = joint_target_kd[dof_start]
 
+        # BALL velocities use joint-frame XYZ; damping coefficients follow the authored axes.
+        omega = wp.vec3(joint_qd[dof_start], joint_qd[dof_start + 1], joint_qd[dof_start + 2])
+        passive_torque = wp.vec3()
         for i in range(3):
-            S_s = joint_S_s[dof_start + i]
-
-            # w = joint_qd[dof_start + i]
-            # r = joint_q[coord_start + i]
-
             j = dof_start + i
-            passive_f = -joint_damping[j] * joint_qd[j]
-            tau[j] = -wp.dot(S_s, body_f_s) + joint_f[j] + passive_f
-            # tau -= w * target_kd - r * target_ke
+            axis = joint_axis[j]
+            passive_torque -= joint_damping[j] * wp.dot(axis, omega) * axis
+
+        for i in range(3):
+            j = dof_start + i
+            S_s = joint_S_s[j]
+            tau[j] = -wp.dot(S_s, body_f_s) + joint_f[j] + passive_torque[i]
 
         return
 
@@ -1430,6 +1433,7 @@ def eval_rigid_tau(
     joint_qd_start: wp.array[int],
     joint_target_q_start: wp.array[int],
     joint_dof_dim: wp.array2d[int],
+    joint_axis: wp.array[wp.vec3],
     joint_target_q: wp.array[float],
     joint_target_qd: wp.array[float],
     joint_q: wp.array[float],
@@ -1499,6 +1503,7 @@ def eval_rigid_tau(
             joint_damping,
             joint_stiffness,
             joint_rest_q,
+            joint_axis,
             joint_S_s,
             joint_q,
             joint_qd,

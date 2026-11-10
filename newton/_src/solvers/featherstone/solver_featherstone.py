@@ -815,6 +815,7 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                             model.joint_qd_start,
                             model.joint_target_q_start,
                             model.joint_dof_dim,
+                            model.joint_axis,
                             control.joint_target_q,
                             control.joint_target_qd,
                             state_in.joint_q,
