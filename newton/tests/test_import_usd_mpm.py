@@ -902,6 +902,37 @@ class TestImportUsdMPM(unittest.TestCase):
 
         np.testing.assert_allclose(builder.particle_mass, [8.0, 64.0], rtol=1.0e-6)
 
+    def test_rejects_bad_canonical_masses_with_valid_legacy(self):
+        """Reject malformed canonical masses rather than using valid legacy masses."""
+        from pxr import Gf, Sdf, UsdPhysics
+
+        from newton.exceptions import NewtonDeprecationWarning
+
+        stage, _scene = self._stage()
+        UsdPhysics.SetStageKilogramsPerUnit(stage, 0.001)
+        points = self._points(
+            stage,
+            "/World/Sand",
+            [Gf.Vec3f(), Gf.Vec3f(1.0, 0.0, 0.0)],
+            widths=[0.1],
+        )
+        prim = points.GetPrim()
+        prim.CreateAttribute("newton:masses", Sdf.ValueTypeNames.FloatArray).Set([3000.0])
+        prim.CreateAttribute("physics:masses", Sdf.ValueTypeNames.FloatArray).Set([2000.0, 3000.0])
+
+        builder = newton.ModelBuilder()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", NewtonDeprecationWarning)
+            with self.assertRaisesRegex(ValueError, r"/World/Sand: newton:masses must contain 2 values, got 1"):
+                builder.add_usd(stage, load_visual_shapes=False)
+
+        self.assertEqual(builder.particle_count, 0)
+        deprecations = [str(w.message) for w in caught if issubclass(w.category, NewtonDeprecationWarning)]
+        self.assertEqual(
+            deprecations,
+            ["/World/Sand: 'physics:masses' on points is deprecated; use 'newton:masses' instead."],
+        )
+
     def test_prefers_authored_particle_masses_and_converts_mass_units(self):
         """Prefer per-point masses and convert them independently of transform scale."""
         from pxr import Gf, UsdGeom, UsdPhysics
