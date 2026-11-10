@@ -102,6 +102,7 @@ class SolverXPBD(TendonStateMixin, SolverBase, CouplingInterface):
         - :attr:`~newton.Model.joint_enabled`,
           :attr:`~newton.Model.joint_target_ke`/:attr:`~newton.Model.joint_target_kd`, and
           :attr:`~newton.Control.joint_f` are supported.
+          Passive :attr:`~newton.Model.joint_damping` is supported for BALL joints.
           Joint limits are enforced as hard positional constraints (``joint_limit_ke``/``joint_limit_kd`` are not used).
         - :attr:`~newton.Model.joint_armature`, :attr:`~newton.Model.joint_friction`,
           :attr:`~newton.Model.joint_effort_limit`, :attr:`~newton.Model.joint_velocity_limit`,
@@ -605,6 +606,7 @@ class SolverXPBD(TendonStateMixin, SolverBase, CouplingInterface):
                         dim=model.joint_count,
                         inputs=[
                             state_in.body_q,
+                            state_in.body_qd,
                             model.body_com,
                             model.joint_type,
                             model.joint_enabled,
@@ -616,6 +618,7 @@ class SolverXPBD(TendonStateMixin, SolverBase, CouplingInterface):
                             model.joint_dof_dim,
                             model.joint_axis,
                             control.joint_f,
+                            model.joint_damping,
                             dt,
                         ],
                         outputs=[body_f_tmp, joint_impulse],

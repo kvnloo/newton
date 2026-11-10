@@ -187,6 +187,24 @@ def test_semi_implicit_ball_joint_damping_decays_velocity(test: TestJointDamping
             test.assertLess(damped_final, damped_initial * 0.85)
 
 
+def test_xpbd_ball_joint_damping_cpu(test: TestJointDamping, device):
+    """Decay BALL joint angular velocity with passive damping in XPBD on CPU."""
+
+    def solver_fn(model):
+        return newton.solvers.SolverXPBD(model, angular_damping=0.0)
+
+    for initial_qd in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)):
+        with test.subTest(initial_qd=initial_qd):
+            undamped_initial, undamped_final = _simulate_ball_joint_damping(
+                device, solver_fn, damping=0.0, initial_qd=initial_qd
+            )
+            damped_initial, damped_final = _simulate_ball_joint_damping(
+                device, solver_fn, damping=3.0, initial_qd=initial_qd
+            )
+            np.testing.assert_allclose([undamped_initial, damped_initial, undamped_final], [1.0] * 3, atol=1e-5)
+            test.assertLess(damped_final, 0.85)
+
+
 def test_featherstone_ball_joint_damping_decays_velocity(test: TestJointDamping, device):
     def solver_fn(model):
         return newton.solvers.SolverFeatherstone(model, angular_damping=0.0)
@@ -285,6 +303,13 @@ for device in devices:
         test_add_joint_ball_sets_passive_damping,
         devices=[device],
     )
+
+add_function_test(
+    TestJointDamping,
+    "test_xpbd_ball_joint_damping_cpu",
+    test_xpbd_ball_joint_damping_cpu,
+    devices=[wp.get_device("cpu")],
+)
 
 for device in get_cuda_test_devices():
     add_function_test(

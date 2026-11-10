@@ -1000,6 +1000,7 @@ def apply_body_delta_velocities(
 @wp.kernel
 def apply_joint_forces(
     body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
     body_com: wp.array[wp.vec3],
     joint_type: wp.array[int],
     joint_enabled: wp.array[bool],
@@ -1011,6 +1012,7 @@ def apply_joint_forces(
     joint_dof_dim: wp.array2d[int],
     joint_axis: wp.array[wp.vec3],
     joint_f: wp.array[float],
+    joint_damping: wp.array[float],
     dt: float,
     body_f: wp.array[wp.spatial_vector],
     joint_impulse: wp.array[wp.spatial_vector],
@@ -1077,6 +1079,16 @@ def apply_joint_forces(
         return
     elif type == JointType.BALL:
         t_total = wp.vec3(joint_f[qd_start + 0], joint_f[qd_start + 1], joint_f[qd_start + 2])
+        # Passive damping is joint-frame aligned; body angular velocities are world-frame.
+        omega_rel = wp.spatial_bottom(body_qd[id_c])
+        if id_p >= 0:
+            omega_rel -= wp.spatial_bottom(body_qd[id_p])
+        axis_0 = wp.transform_vector(X_wp, joint_axis[qd_start + 0])
+        axis_1 = wp.transform_vector(X_wp, joint_axis[qd_start + 1])
+        axis_2 = wp.transform_vector(X_wp, joint_axis[qd_start + 2])
+        t_total -= joint_damping[qd_start + 0] * wp.dot(omega_rel, axis_0) * axis_0
+        t_total -= joint_damping[qd_start + 1] * wp.dot(omega_rel, axis_1) * axis_1
+        t_total -= joint_damping[qd_start + 2] * wp.dot(omega_rel, axis_2) * axis_2
 
     elif type == JointType.REVOLUTE or type == JointType.PRISMATIC or type == JointType.D6:
         # unroll for loop to ensure joint actions remain differentiable
