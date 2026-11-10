@@ -894,6 +894,7 @@ def _eval_separating_contact_damping_kernel(
     damping_hessians[mode, 1] = body_particle_hessian_damped - body_particle_hessian_undamped
 
     # Rigid-rigid: body 0 lifts off a static shape (body index -1) along the contact normal.
+    # Keep angular friction disabled to isolate normal contact damping.
     (
         _force_a_damped,
         _torque_a_damped,
@@ -905,6 +906,7 @@ def _eval_separating_contact_damping_kernel(
         h_ll_b_damped,
         _h_al_b_damped,
         _h_aa_b_damped,
+        _pure_torque_b_damped,
     ) = evaluate_rigid_contact_from_collision(
         -1,
         0,
@@ -920,10 +922,15 @@ def _eval_separating_contact_damping_kernel(
         0.06,
         100.0,
         100.0,
-        100.0,
+        wp.mat22(100.0, 100.0, 1.0, 0.0),
         20.0,
         wp.vec3(0.0),
         0.0,
+        0.0,
+        0.0,
+        0.0,
+        wp.mat22(0.0, 0.0, 1.0, 0.0),
+        wp.vec3(0.0),
         0.01,
         0,
         0,
@@ -942,6 +949,7 @@ def _eval_separating_contact_damping_kernel(
         h_ll_b_undamped,
         _h_al_b_undamped,
         _h_aa_b_undamped,
+        _pure_torque_b_undamped,
     ) = evaluate_rigid_contact_from_collision(
         -1,
         0,
@@ -957,10 +965,15 @@ def _eval_separating_contact_damping_kernel(
         0.06,
         100.0,
         100.0,
-        100.0,
+        wp.mat22(100.0, 100.0, 1.0, 0.0),
         0.0,
         wp.vec3(0.0),
         0.0,
+        0.0,
+        0.0,
+        0.0,
+        wp.mat22(0.0, 0.0, 1.0, 0.0),
+        wp.vec3(0.0),
         0.01,
         0,
         0,
