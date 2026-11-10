@@ -8825,6 +8825,25 @@ class ModelBuilder:
             else:
                 self.joint_children[p].append((c, i))
 
+        # Collapsing a fixed chain changes the endpoints of retained joints. Existing
+        # adjacency filters refer to the old endpoints, so include shape pairs for
+        # the surviving parent and child without duplicating earlier exclusions.
+        if body_merged_parent:
+            existing_filters = set(self.shape_collision_filter_pairs)
+            for joint_idx, (parent, child) in enumerate(zip(self.joint_parent, self.joint_child, strict=True)):
+                if not self.joint_collision_filter_parent[joint_idx]:
+                    continue
+                for parent_shape in self.body_shapes[parent]:
+                    if not self.shape_flags[parent_shape] & ShapeFlags.COLLIDE_SHAPES:
+                        continue
+                    for child_shape in self.body_shapes[child]:
+                        if not self.shape_flags[child_shape] & ShapeFlags.COLLIDE_SHAPES:
+                            continue
+                        pair = (min(parent_shape, child_shape), max(parent_shape, child_shape))
+                        if pair not in existing_filters:
+                            self.add_shape_collision_filter_pair(*pair)
+                            existing_filters.add(pair)
+
         # Warning filters may raise, so finish rebuilding all references before emitting these.
         for label in removed_curve_labels:
             warnings.warn(
