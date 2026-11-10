@@ -18,9 +18,7 @@ class TestBuilderFixedJointCollisionFilters(unittest.TestCase):
 
                 root_joint = builder.add_joint_free(root)
                 fixed_joint = builder.add_joint_fixed(root, welded)
-                tip_joint = builder.add_joint_revolute(
-                    welded, tip, collision_filter_parent=filter_parent
-                )
+                tip_joint = builder.add_joint_revolute(welded, tip, collision_filter_parent=filter_parent)
                 builder.add_articulation([root_joint, fixed_joint, tip_joint])
 
                 root_shape = builder.add_shape_sphere(root, radius=0.1)
