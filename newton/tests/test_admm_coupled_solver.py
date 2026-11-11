@@ -824,6 +824,45 @@ class TestAdmmProximal(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(part_g)))
 
 
+    def test_configured_particle_mass_survives_gamma_proximal_refresh(self):
+        """Retain authored mass when ADMM refreshes particle proximal properties on CPU."""
+        builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+        for i in range(2):
+            builder.add_particle(
+                pos=(float(i), 0.0, 0.0),
+                vel=(0.0, 0.0, 0.0),
+                mass=1.0,
+                radius=0.05,
+            )
+        model = builder.finalize(device="cpu")
+
+        def configure(view):
+            view.set_particle_mass(
+                wp.array([1], dtype=int, device=view.device),
+                wp.array([4.0], dtype=float, device=view.device),
+            )
+
+        solver = SolverCoupledADMM(
+            model,
+            entries=[
+                SolverCoupled.Entry(name="other", solver=SolverXPBD, particles=[0]),
+                SolverCoupled.Entry(name="custom", solver=SolverXPBD, particles=[1], configure_view=configure),
+            ],
+            coupling=SolverCoupledADMM.Config(iterations=1, rho=1.0, gamma=1.0),
+        )
+        view = solver.view("custom")
+        np.testing.assert_allclose(view.particle_mass.numpy(), [0.0, 4.0])
+        np.testing.assert_allclose(view.particle_inv_mass.numpy(), [0.0, 0.25])
+        for parent_last_mass in (7.0, 11.0):
+            parent_masses = np.array([3.0, parent_last_mass], dtype=np.float32)
+            model.particle_mass.assign(parent_masses)
+            model.particle_inv_mass.assign(1.0 / parent_masses)
+            solver.notify_model_changed(newton.ModelFlags.MODEL_PROPERTIES)
+            solver._refresh_admm_proximal_view_overrides(refresh_supported_solvers=False)
+            np.testing.assert_allclose(view.particle_mass.numpy(), [0.0, 4.0])
+            np.testing.assert_allclose(view.particle_inv_mass.numpy(), [0.0, 0.25])
+            np.testing.assert_allclose(model.particle_mass.numpy(), parent_masses)
+
 class TestAdmmGraphCapture(unittest.TestCase):
     """CUDA graph-capture smoke tests for dynamic proximal refresh."""
 
