@@ -22,6 +22,31 @@ from newton.tests.unittest_utils import assert_np_equal
 
 
 class TestInertia(unittest.TestCase):
+    def test_open_triangle_origin_contract_cpu(self):
+        """Pin the recentered solid and hollow behavior of an open triangle on CPU."""
+        indices = np.array([[0, 1, 2]], dtype=np.int32)
+        with wp.ScopedDevice("cpu"):
+            for z in (0.0, 1.0, 2.0):
+                with self.subTest(z=z):
+                    vertices = np.array(
+                        [[0.0, 0.0, z], [1.0, 0.0, z], [0.0, 1.0, z]],
+                        dtype=np.float64,
+                    )
+                    solid_mass, _, _, solid_volume = compute_inertia_mesh(
+                        density=6.0, vertices=vertices, indices=indices, is_solid=True
+                    )
+                    hollow_mass, _, _, hollow_volume = compute_inertia_mesh(
+                        density=6.0,
+                        vertices=vertices,
+                        indices=indices,
+                        is_solid=False,
+                        thickness=0.01,
+                    )
+                    self.assertAlmostEqual(solid_volume, 0.0, delta=1.0e-6)
+                    self.assertAlmostEqual(solid_mass, 0.0, delta=1.0e-6)
+                    self.assertAlmostEqual(hollow_volume, 0.01, delta=2.0e-6)
+                    self.assertAlmostEqual(hollow_mass, 0.06, delta=2.0e-5)
+
     def test_cube_mesh_inertia(self):
         # Unit cube
         vertices = [
