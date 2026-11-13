@@ -170,6 +170,51 @@ class TestImportUsdPhysics(unittest.TestCase):
                 self.assertAlmostEqual(builder.body_mass[result["path_body_map"]["/Body"]], defaults.density * 8.0)
 
     @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_physx_body_damping_reports_unsupported_import(self):
+        """Report ignored authored PhysX damping without warning for supported Steel imports."""
+        from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+
+        from newton.solvers import SolverSteel
+
+        stage = Usd.Stage.CreateInMemory()
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+        UsdPhysics.Scene.Define(stage, "/physicsScene")
+        cube = UsdGeom.Cube.Define(stage, "/Body")
+        prim = cube.GetPrim()
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.CollisionAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(1.0)
+        for name, value in (
+            ("physxRigidBody:linearDamping", 0.4),
+            ("physxRigidBody:angularDamping", 0.2),
+        ):
+            prim.CreateAttribute(name, Sdf.ValueTypeNames.Float).Set(value)
+
+        with self.assertLogs("newton._src.utils.import_usd", level="WARNING") as captured:
+            builder = newton.ModelBuilder()
+            builder.add_usd(stage, load_visual_shapes=False)
+        self.assertEqual(len(captured.output), 1)
+        for text in ("/Body", "physxRigidBody:linearDamping", "physxRigidBody:angularDamping"):
+            self.assertIn(text, captured.output[0])
+        self.assertEqual(builder.finalize(device="cpu").body_count, 1)
+
+        steel_builder = newton.ModelBuilder()
+        SolverSteel.register_custom_attributes(steel_builder)
+        with self.assertNoLogs("newton._src.utils.import_usd", level="WARNING"):
+            steel_builder.add_usd(stage, load_visual_shapes=False)
+        steel_model = steel_builder.finalize(device="cpu")
+        np.testing.assert_allclose(steel_model.steel.rigid_body_linear_damping.numpy(), [0.4])
+        np.testing.assert_allclose(steel_model.steel.rigid_body_angular_damping.numpy(), [0.2])
+
+        prim.GetAttribute("physxRigidBody:linearDamping").Set(0.0)
+        prim.GetAttribute("physxRigidBody:angularDamping").Set(0.0)
+        with self.assertNoLogs("newton._src.utils.import_usd", level="WARNING"):
+            zero_builder = newton.ModelBuilder()
+            zero_builder.add_usd(stage, load_visual_shapes=False)
+        self.assertEqual(zero_builder.finalize(device="cpu").body_count, 1)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_rigid_body_velocity(self):
         """Import rigid-body velocities correctly with either body ordering."""
         for bodies_follow_joint_ordering in (False, True):
