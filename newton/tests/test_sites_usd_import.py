@@ -573,5 +573,95 @@ def Xform "World" {{
                     np.testing.assert_allclose(model.shape_scale.numpy()[site], expected)
 
 
+    def test_site_precision_at_float32_world_ulp_boundaries(self):
+        """Preserve body-local offsets below the float32 world-space ULP."""
+        from pxr import Gf, UsdGeom
+
+        cases = (
+            (0.0, 0.25),
+            (1048576.0, 0.03125),
+            (16777216.0, 0.5),
+        )
+        for body_x, local_x in cases:
+            with self.subTest(body_x=body_x, local_x=local_x):
+                stage = self._create_usd_stage(
+                    """#usda 1.0
+(
+    upAxis = "Z"
+)
+def Xform "World" {
+    def Xform "body" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {
+        float physics:mass = 1.0
+        float3 physics:diagonalInertia = (0.1, 0.1, 0.1)
+        def Sphere "site" (prepend apiSchemas = ["MjcSiteAPI"]) {
+            double radius = 0.01
+        }
+    }
+}
+"""
+                )
+                body = UsdGeom.Xformable(stage.GetPrimAtPath("/World/body"))
+                body.AddTranslateOp().Set(Gf.Vec3d(body_x, 0.0, 0.0))
+                site = UsdGeom.Xformable(stage.GetPrimAtPath("/World/body/site"))
+                site.AddTranslateOp().Set(Gf.Vec3d(local_x, 0.0, 0.0))
+
+                builder = newton.ModelBuilder()
+                builder.add_usd(stage, load_visual_shapes=False)
+                model = builder.finalize(device="cpu")
+                site_id = model.shape_label.index("/World/body/site")
+                actual_x = float(model.shape_transform.numpy()[site_id, 0])
+                self.assertEqual(actual_x, local_x)
+
+    def test_sheared_body_site_and_visual_share_local_position(self):
+        """A co-located site and visual must use the same builder body frame."""
+        from pxr import Gf, UsdGeom
+
+        stage = self._create_usd_stage(
+            """#usda 1.0
+(
+    upAxis = "Z"
+)
+def Xform "World" {
+    def Xform "scaled" {
+        def Xform "body" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        ) {
+            float physics:mass = 1.0
+            float3 physics:diagonalInertia = (0.1, 0.1, 0.1)
+            def Sphere "site" (prepend apiSchemas = ["MjcSiteAPI"]) {
+                double radius = 0.01
+            }
+            def Sphere "visual" {
+                double radius = 0.01
+            }
+        }
+    }
+}
+"""
+        )
+        ancestor = UsdGeom.Xformable(stage.GetPrimAtPath("/World/scaled"))
+        ancestor.AddScaleOp().Set(Gf.Vec3f(2.0, 3.0, 4.0))
+        body = UsdGeom.Xformable(stage.GetPrimAtPath("/World/scaled/body"))
+        body.AddRotateZOp().Set(45.0)
+        for name in ("site", "visual"):
+            prim = UsdGeom.Xformable(stage.GetPrimAtPath(f"/World/scaled/body/{name}"))
+            prim.AddTranslateOp().Set(Gf.Vec3d(0.25, -0.375, 0.5))
+
+        builder = newton.ModelBuilder()
+        builder.add_usd(stage, load_visual_shapes=True)
+        model = builder.finalize(device="cpu")
+        transforms = model.shape_transform.numpy()
+        site_id = model.shape_label.index("/World/scaled/body/site")
+        visual_id = model.shape_label.index("/World/scaled/body/visual")
+        np.testing.assert_allclose(
+            transforms[site_id, :3],
+            transforms[visual_id, :3],
+            rtol=0.0,
+            atol=1.0e-5,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
