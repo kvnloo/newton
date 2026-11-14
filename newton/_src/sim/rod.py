@@ -566,6 +566,117 @@ class Rod:
         return rigidities
 
     @staticmethod
+    def create_spline(
+        control_points: Sequence[Vec3] | np.ndarray,
+        *,
+        segment_count: int | None = None,
+        segment_length: float | None = None,
+        closed: bool = False,
+        twist_total: float = 0.0,
+        normal_hint: Vec3 | None = None,
+        alpha: float = 0.5,
+        rest_points: Sequence[Vec3] | np.ndarray | None = None,
+        rest_quaternions: Sequence[Quat] | np.ndarray | None = None,
+        rest_straight: bool = False,
+        radius: float | None = None,
+        youngs_modulus: float | None = None,
+        poissons_ratio: float | None = None,
+        shear_modulus: float | None = None,
+        stretch_rigidity: float | None = None,
+        shear_rigidity: float | None = None,
+        bend_rigidity: float | None = None,
+        twist_rigidity: float | None = None,
+    ) -> Rod:
+        """Create a rod following an arc-length-resampled Catmull-Rom spline.
+
+        Consecutive duplicate controls are merged before interpolation. The
+        sampled centerline has nearly uniform chord lengths, and each segment
+        receives a double-reflection rotation-minimizing material frame.
+        Assembly is performed separately by :meth:`newton.ModelBuilder.add_rod`.
+
+        This is an experimental Python construction API; its spline-specific
+        options may change before upstream acceptance.
+
+        Args:
+            control_points: World-space interpolated controls, with at least
+                two distinct positions for open curves or three for loops.
+            segment_count: Number of output segments, at least two. Specify
+                exactly one of this argument and ``segment_length``.
+            segment_length: Requested approximate arc-length spacing [m].
+                The segment count is rounded to the nearest positive count
+                and limited to at least two.
+            closed: Close the sampled centerline and its final rod joint.
+            twist_total: Total frame roll [rad] across the centerline. For
+                closed curves only integer multiples of 2*pi are accepted.
+            normal_hint: Optional world direction selecting the first normal.
+            alpha: Catmull-Rom parameterization in [0, 1], with default
+                centripetal interpolation at 0.5.
+            rest_points: Optional separate structural-rest centerline, with
+                the same point count and topology as the initial spline.
+            rest_quaternions: Optional structural-rest material frames.
+            rest_straight: Use zero intrinsic bend/twist at rest without
+                changing the initial spline shape. Cannot be combined with
+                explicit rest geometry.
+            radius: Optional circular-section and capsule radius [m].
+            youngs_modulus: Optional Young's modulus E [Pa].
+            poissons_ratio: Optional Poisson's ratio.
+            shear_modulus: Optional shear modulus G [Pa].
+            stretch_rigidity: Optional axial rigidity EA [N].
+            shear_rigidity: Optional shear rigidity kGA [N].
+            bend_rigidity: Optional bending rigidity EI [N*m^2].
+            twist_rigidity: Optional torsional rigidity GJ [N*m^2].
+
+        Returns:
+            A :class:`Rod` with initial spline points and frames. Its
+            implicit rest shape follows the spline unless alternate rest
+            properties are provided.
+
+        Raises:
+            ValueError: If controls, sampling parameters, closed-loop twist,
+                frames, rest shape, or material parameters are invalid.
+        """
+        from .rod_spline import _rotation_minimizing_spline_quaternions, _sample_spline_points
+
+        twist = float(twist_total)
+        if not math.isfinite(twist):
+            raise ValueError("twist_total must be finite")
+        if closed:
+            turns = twist / (2.0 * math.pi)
+            if abs(turns - round(turns)) > 1.0e-6:
+                raise ValueError("twist_total must be a multiple of 2*pi for closed rods")
+
+        controls = Rod._normalize_points(control_points, name="control_points")
+        points = _sample_spline_points(
+            controls,
+            segment_count=segment_count,
+            segment_length=segment_length,
+            closed=closed,
+            alpha=alpha,
+        )
+        quaternions = _rotation_minimizing_spline_quaternions(
+            points,
+            twist_total=twist,
+            normal_hint=None if normal_hint is None else axis_to_vec3(normal_hint),
+            closed=closed,
+        )
+        return Rod(
+            points,
+            quaternions=quaternions,
+            rest_points=rest_points,
+            rest_quaternions=rest_quaternions,
+            rest_straight=rest_straight,
+            closed=closed,
+            radius=radius,
+            youngs_modulus=youngs_modulus,
+            poissons_ratio=poissons_ratio,
+            shear_modulus=shear_modulus,
+            stretch_rigidity=stretch_rigidity,
+            shear_rigidity=shear_rigidity,
+            bend_rigidity=bend_rigidity,
+            twist_rigidity=twist_rigidity,
+        )
+
+    @staticmethod
     def create_straight(
         start: Vec3,
         direction: Vec3,

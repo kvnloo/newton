@@ -107,6 +107,27 @@ The model exposes ``curve_label``, ``curve_world``, and ``curve_count``.
 Its ``curve_body_start/end`` and ``curve_joint_start/end`` arrays identify
 each curve's bodies and joints.
 
+A curved cable can be authored through :meth:`newton.Rod.create_spline`
+and assembled using the existing rod builder path:
+
+.. code-block:: python
+
+    rod = newton.Rod.create_spline(
+        [(0.0, 0.0, 0.0), (0.5, 0.4, 0.0), (1.0, 0.0, 0.0)],
+        segment_count=8,
+        radius=0.02,
+    )
+    builder = newton.ModelBuilder()
+    bodies, joints = builder.add_rod(rod=rod, label="curved_cable")
+
+The default intrinsic rest shape follows the initial spline. Pass
+``rest_straight=True`` for zero intrinsic bend and twist, or pass
+``rest_points`` and ``rest_quaternions`` for explicitly authored rest
+geometry. Closed splines create one extra loop-closing joint and require a
+whole-number multiple of ``2*pi`` for ``twist_total``. Spline sampling is
+CPU-side construction; the resulting rod works with the existing builder and
+simulation backends. This factory is experimental pending upstream API review.
+
 For example, rename a prototype cable and clone it into two worlds:
 
 .. testcode::
