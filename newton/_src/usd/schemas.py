@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..core.types import override
 from ..exceptions import NewtonDeprecationWarning, NewtonWarning
@@ -417,6 +417,21 @@ class SchemaResolverPhysx(SchemaResolver):
             "self_collision_enabled": SchemaAttribute("physxArticulation:enabledSelfCollisions", True),
         },
     }
+
+    @override
+    def get_value(self, prim: Usd.Prim, prim_type: PrimType, key: str) -> Any | None:
+        """Warn when PhysX's load-dependent joint friction cannot be imported faithfully."""
+        if prim_type == PrimType.JOINT and key == "friction" and prim is not None:
+            attr = prim.GetAttribute("physxJoint:jointFriction")
+            if attr and attr.HasAuthoredValue():
+                warnings.warn(
+                    f"{prim.GetPath()}: physxJoint:jointFriction is dimensionless and load-dependent; "
+                    "it cannot be converted to Newton's load-independent joint friction force/torque. "
+                    "Ignoring the PhysX value; author newton:friction in absolute units instead.",
+                    NewtonWarning,
+                    stacklevel=3,
+                )
+        return super().get_value(prim, prim_type, key)
 
 
 def solref_to_stiffness_damping(solref: Sequence[float] | None) -> tuple[float | None, float | None]:
