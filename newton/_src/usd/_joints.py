@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -358,6 +359,15 @@ def parse_joint(
         # for drive in joint_desc.jointDrives:
         #     print("joint_path :", joint_path, drive.first, drive.second.targetPosition, drive.second.targetVelocity)
 
+        # USD D6 limits are authored separately for each translational and rotational axis.
+        d6_axis_names = {
+            UsdPhysics.JointDOF.TransX: "transX",
+            UsdPhysics.JointDOF.TransY: "transY",
+            UsdPhysics.JointDOF.TransZ: "transZ",
+            UsdPhysics.JointDOF.RotX: "rotX",
+            UsdPhysics.JointDOF.RotY: "rotY",
+            UsdPhysics.JointDOF.RotZ: "rotZ",
+        }
         for limit in joint_desc.jointLimits:
             dof = limit.first
             if limit.second.enabled:
@@ -366,6 +376,12 @@ def parse_joint(
             else:
                 limit_lower = builder.default_joint_cfg.limit_lower
                 limit_upper = builder.default_joint_cfg.limit_upper
+
+            # NaN would silently make the axis appear locked in the comparison below.
+            for bound_name, bound_value in (("lower", limit_lower), ("upper", limit_upper)):
+                if math.isnan(bound_value):
+                    axis_name = d6_axis_names.get(dof, str(dof))
+                    raise ValueError(f"USD joint {joint_path} axis {axis_name} has NaN {bound_name} limit")
 
             free_axis = limit_lower < limit_upper
 
