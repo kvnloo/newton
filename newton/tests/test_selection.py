@@ -189,6 +189,38 @@ class TestSelection(unittest.TestCase):
                 self.assertEqual(view.is_fixed_base, expected_fixed)
                 self.assertEqual(view.is_floating_base, expected_floating)
 
+    def test_floating_root_transforms_use_body_state_on_cpu(self):
+        """Read current root-body poses even when the root links are excluded."""
+        builder = newton.ModelBuilder()
+        for index in range(2):
+            root = builder.add_link(label=f"robot_{index}/base")
+            tip = builder.add_link(label=f"robot_{index}/tip")
+            free = builder.add_joint_free(parent=-1, child=root, label=f"robot_{index}/root")
+            fixed = builder.add_joint_fixed(parent=root, child=tip, label=f"robot_{index}/tip_joint")
+            builder.add_articulation([free, fixed], label=f"robot_{index}")
+        model = builder.finalize(device="cpu")
+        state = model.state()
+        view = ArticulationView(model, "robot_*", include_links="tip")
+        self.assertEqual(view.link_names, ["tip"])
+
+        model_roots = view.get_root_transforms(model).numpy().copy()
+        joint_ids = model.articulation_start.numpy()[view.articulation_ids.numpy().reshape(-1)]
+        root_bodies = model.joint_child.numpy()[joint_ids]
+        expected = np.array(
+            [[1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0], [-2.0, 1.0, 0.5, 0.0, 0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+        poses = state.body_q.numpy().copy()
+        poses[root_bodies] = expected
+        state.body_q.assign(wp.array(poses, dtype=wp.transform, device="cpu"))
+        assert_np_equal(view.get_root_transforms(state).numpy().reshape(2, 7), expected)
+        assert_np_equal(view.get_root_transforms(model).numpy(), model_roots)
+
+        # A solver can replace body_q; root reads must follow the current allocation.
+        poses[root_bodies, :3] += np.array([0.25, -0.5, 1.25], dtype=np.float32)
+        state.body_q = wp.array(poses, dtype=wp.transform, device="cpu")
+        assert_np_equal(view.get_root_transforms(state).numpy().reshape(2, 7), poses[root_bodies])
+
     def test_labels_preserve_full_paths(self):
         """Two-finger gripper whose distal bodies, finger joints, and tip
         shapes each share a colliding leaf name. ``*_names`` attributes
@@ -2040,6 +2072,7 @@ def test_sparse_world_root_transforms_and_velocities(test, device):
             view = ArticulationView(model, "robot_a", homogeneous=layout == "dense", verbose=False)
             test.assertTrue(view.is_floating_base)
             root_joints = model.articulation_start.numpy()[view.articulation_ids.numpy().reshape(-1)]
+            root_bodies = model.joint_child.numpy()[root_joints]
             q_start = model.joint_q_start.numpy()[root_joints]
             qd_start = model.joint_qd_start.numpy()[root_joints]
 
@@ -2048,6 +2081,10 @@ def test_sparse_world_root_transforms_and_velocities(test, device):
             qd = np.arange(model.joint_dof_count, dtype=np.float32) + 0.5
             state.joint_q.assign(q)
             state.joint_qd.assign(qd)
+            poses = state.body_q.numpy().copy()
+            for root_body, start in zip(root_bodies, q_start, strict=True):
+                poses[root_body] = q[start : start + 7]
+            state.body_q.assign(wp.array(poses, dtype=wp.transform, device=device))
 
             transforms = view.get_root_transforms(state).numpy().reshape(3, 7)
             velocities = view.get_root_velocities(state).numpy().reshape(3, 6)
@@ -2188,7 +2225,9 @@ def test_sparse_world_getters_capture_cold(test, device):
             view = ArticulationView(model, "robot_a", homogeneous=layout == "dense", verbose=False)
             articulation_ids = view.articulation_ids.numpy().reshape(-1)
             rows = _articulation_rows(model, articulation_ids)
-            root_start = model.joint_q_start.numpy()[model.articulation_start.numpy()[articulation_ids]]
+            root_joints = model.articulation_start.numpy()[articulation_ids]
+            root_start = model.joint_q_start.numpy()[root_joints]
+            root_bodies = model.joint_child.numpy()[root_joints]
             positions = wp.zeros((3, 1, 8), dtype=float, device=device)
             roots = wp.zeros((3, 1), dtype=wp.transform, device=device)
             velocities = wp.zeros((3, 1, 7), dtype=float, device=device)
@@ -2204,6 +2243,10 @@ def test_sparse_world_getters_capture_cold(test, device):
                 new_velocities = -rng.random((3, 1, 7), dtype=np.float32)
                 state.joint_q.assign(q)
                 state.joint_qd.assign(qd)
+                poses = state.body_q.numpy().copy()
+                for root_body, start in zip(root_bodies, root_start, strict=True):
+                    poses[root_body] = q[start : start + 7]
+                state.body_q.assign(wp.array(poses, dtype=wp.transform, device=device))
                 velocities.assign(new_velocities)
                 wp.capture_launch(capture.graph)
                 assert_np_equal(positions.numpy(), q[rows["coord"]][:, None])
