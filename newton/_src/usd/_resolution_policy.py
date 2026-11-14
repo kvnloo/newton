@@ -261,6 +261,10 @@ class _UsdJointProperties:
         )
         limit_lower = jd.limit.lower
         limit_upper = jd.limit.upper
+        # USD joint limits may be unbounded (infinity), but NaN is never meaningful.
+        for bound_name, bound_value in (("lower", limit_lower), ("upper", limit_upper)):
+            if math.isnan(bound_value):
+                raise ValueError(f"USD joint {jp_prim.GetPath()} has NaN {bound_name} limit")
 
         has_drive = jd.drive.enabled
         target_pos = jd.drive.targetPosition if has_drive else 0.0
