@@ -740,13 +740,20 @@ def parse_usd(
             return (body_idx, wp.vec3())
 
         body_prim = stage.GetPrimAtPath(body_path)
-        # Keep the world-to-local subtraction in USD's double precision. Casting
-        # both world poses to Warp first loses small authored site offsets, even
-        # for a pure translation. The rigid body frame excludes scale, while the
-        # target's full world position retains scale and reset-xform semantics.
-        body_world = xform_cache.GetLocalToWorldTransform(body_prim).RemoveScaleShear()
-        target_world = xform_cache.GetLocalToWorldTransform(target_prim)
-        local_pos = body_world.GetInverse().Transform(target_world.ExtractTranslation())
+        # Use the same rigid rotation as the imported body: usd.get_transform
+        # decomposes the world matrix with Warp, not Gf.RemoveScaleShear.
+        # The latter can keep tiny scales or produce a different frame under
+        # shear. Preserve double-precision world positions until the final cast.
+        body_rotation = usd.get_transform(body_prim, local=False, xform_cache=xform_cache).q
+        rigid_rotation = Gf.Rotation(
+            Gf.Quatd(
+                float(body_rotation[3]),
+                Gf.Vec3d(float(body_rotation[0]), float(body_rotation[1]), float(body_rotation[2])),
+            )
+        )
+        body_position = xform_cache.GetLocalToWorldTransform(body_prim).ExtractTranslation()
+        target_position = xform_cache.GetLocalToWorldTransform(target_prim).ExtractTranslation()
+        local_pos = rigid_rotation.GetInverse().TransformDir(target_position - body_position)
         return (body_idx, wp.vec3(*local_pos))
 
     def _get_first_target(prim: Usd.Prim, rel_name: str) -> str:
