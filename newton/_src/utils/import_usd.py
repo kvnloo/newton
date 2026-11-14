@@ -926,6 +926,20 @@ def parse_usd(
             body_world = xform_cache.GetLocalToWorldTransform(body_prim).RemoveScaleShear()
             site_world = xform_cache.GetLocalToWorldTransform(prim)
             rel_mat = wp.mat44(np.asarray(site_world * body_world.GetInverse()).T)
+
+            # Gf's rigid rotation may differ from the actual builder body
+            # rotation when ancestor scale and body rotation produce shear.
+            # Re-express the precise site-relative matrix in the stored
+            # builder frame, including the importer root/axis rotations.
+            rigid_rot = usd.value_to_warp(body_world.ExtractRotationQuat())
+            if articulation_root_xform is not None:
+                rigid_rot = wp.quat_inverse(articulation_root_xform.q) * rigid_rot
+            rigid_rot = incoming_world_xform.q * rigid_rot
+            frame_rot = wp.quat_inverse(body_xform.q) * rigid_rot
+            # Ignore float32 decomposition noise when the frames coincide:
+            # the unmodified double-relative path preserves exact offsets.
+            if np.linalg.norm(np.asarray(frame_rot)[:3]) > 1.0e-6:
+                rel_mat = _xform_to_mat44(wp.transform(wp.vec3(), frame_rot)) @ rel_mat
         else:
             prim_world_mat = _get_prim_world_mat(
                 prim,

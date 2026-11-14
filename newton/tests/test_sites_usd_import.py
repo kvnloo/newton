@@ -661,6 +661,12 @@ def Xform "World" {
             rtol=0.0,
             atol=1.0e-5,
         )
+        # Quaternions may differ in sign while representing the same rotation.
+        self.assertAlmostEqual(
+            abs(float(np.dot(transforms[site_id, 3:], transforms[visual_id, 3:]))),
+            1.0,
+            delta=1.0e-5,
+        )
 
 
 if __name__ == "__main__":

@@ -1,1 +1,1 @@
-Preserve body-local USD site frames by computing the site-to-body affine transform in USD double precision before the final Warp float32 cast, avoiding cancellation of small site offsets on translated bodies while leaving visual geometry's builder-pose alignment unchanged.
+Preserve body-local USD site precision by computing site-relative transforms in double precision, and keep sites aligned with the builder's stored rigid body frame when ancestor transforms contain shear.
