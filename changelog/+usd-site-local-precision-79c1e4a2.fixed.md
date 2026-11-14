@@ -1,0 +1,1 @@
+Preserve body-local USD site precision by computing site-relative transforms in double precision, and keep sites aligned with the builder's stored rigid body frame when ancestor transforms contain shear.
