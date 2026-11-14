@@ -205,8 +205,16 @@ def quat_velocity(q_now: wp.quat, q_prev: wp.quat, dt: float) -> wp.vec3:
     # dq = q1 * conj(q0)
     dq = wp.normalize(wp.mul(q1, wp.quat_inverse(q0)))
 
-    axis, angle = wp.quat_to_axis_angle(dq)
-    return axis * (angle / dt)
+    # The axis normalization in quat_to_axis_angle loses subnormal rotations
+    # and has an ill-conditioned adjoint near the identity. Use the small-angle
+    # limit of the quaternion logarithm for those rotations instead.
+    v = wp.vec3(dq[0], dq[1], dq[2])
+    sin_half_angle = wp.length(v)
+    if sin_half_angle < 1.0e-6:
+        return v * (2.0 / dt)
+
+    angle = 2.0 * wp.atan2(sin_half_angle, dq[3])
+    return v * (angle / (sin_half_angle * dt))
 
 
 __axis_rotations = {}
