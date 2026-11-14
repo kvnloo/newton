@@ -1363,6 +1363,64 @@ def test_affine_body_state_conversion(test, device):
         np.testing.assert_array_equal(storage.numpy()[[0, 1, -3, -2, -1]], np.full((5, 3), 17.0))
 
 
+def test_affine_kinematic_prediction_ignores_acceleration(test, device):
+    """Use prescribed kinematic velocities, not external acceleration, for contact targets."""
+    dt = 0.1
+    builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+    body = builder.add_link(
+        xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()),
+        com=wp.vec3(0.0, 0.0, 0.0),
+        mass=2.0,
+        inertia=wp.mat33(np.eye(3)),
+        is_kinematic=True,
+    )
+    model = builder.finalize(device=device)
+    test.assertNotEqual(int(model.body_flags.numpy()[body]) & int(newton.BodyFlags.KINEMATIC), 0)
+    inverse_mass = model.body_inv_mass.numpy().copy()
+    inverse_mass[body] = 0.5
+    model.body_inv_mass.assign(inverse_mass)
+
+    state_in, state_reference = model.state(), model.state()
+    rigid_solver = newton.solvers.SolverBase(model)
+    affine_body = AffineBody(model)
+    coordinates = wp.zeros(4 * model.body_count, dtype=wp.vec3, device=device)
+    inertial_targets = wp.zeros(4 * model.body_count, dtype=wp.vec3, device=device)
+
+    # At 2 kg and dt=0.1, a dynamic predictor accelerates its center by
+    # (gravity_z + force_z / 2) * 0.01. Kinematic targets must exclude it.
+    cases = (
+        ("gravity", -10.0, 0.0, 0.0, 1.0),
+        ("applied force", 0.0, 20.0, 0.0, 1.0),
+        ("balanced forces", -10.0, 20.0, 0.0, 1.0),
+        ("prescribed velocity", -10.0, 0.0, 0.5, 1.05),
+    )
+    for name, gravity_z, force_z, velocity_z, expected_z in cases:
+        with test.subTest(case=name):
+            gravity = model.gravity.numpy().copy()
+            gravity[:] = (0.0, 0.0, gravity_z)
+            model.gravity.assign(gravity)
+            forces = np.zeros((model.body_count, 6), dtype=np.float32)
+            forces[body, 2] = force_z
+            state_in.body_f.assign(forces)
+            state_in.body_qd.fill_(wp.spatial_vector(0.0, 0.0, velocity_z, 0.0, 0.0, 0.0))
+
+            rigid_solver.integrate_bodies(model, state_in, state_reference, dt)
+            affine_body.to_internal_state(state_in, coordinates, inertial_targets, dt)
+
+            np.testing.assert_array_equal(state_reference.body_q.numpy()[body], state_in.body_q.numpy()[body])
+            np.testing.assert_array_equal(state_reference.body_qd.numpy()[body], state_in.body_qd.numpy()[body])
+            np.testing.assert_allclose(coordinates.numpy()[4 * body], (0.0, 0.0, 1.0), rtol=0.0, atol=1e-6)
+            np.testing.assert_allclose(
+                inertial_targets.numpy()[4 * body], (0.0, 0.0, expected_z), rtol=0.0, atol=1e-6
+            )
+            np.testing.assert_allclose(
+                inertial_targets.numpy()[4 * body + 1 : 4 * body + 4],
+                coordinates.numpy()[4 * body + 1 : 4 * body + 4],
+                rtol=0.0,
+                atol=1e-6,
+            )
+
+
 devices = get_test_devices()
 
 
@@ -1408,6 +1466,15 @@ add_function_test(
     "test_affine_body_state_conversion",
     test_affine_body_state_conversion,
     devices=devices,
+    check_output=False,
+)
+
+
+add_function_test(
+    TestSolverStyle3D,
+    "test_affine_kinematic_prediction_ignores_acceleration",
+    test_affine_kinematic_prediction_ignores_acceleration,
+    devices=[wp.get_device("cpu")],
     check_output=False,
 )
 

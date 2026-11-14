@@ -152,6 +152,7 @@ def body_to_affine_kernel(
     body_inertia: wp.array[wp.mat33],
     body_inv_mass: wp.array[float],
     body_inv_inertia: wp.array[wp.mat33],
+    body_flags: wp.array[int],
     body_world: wp.array[int],
     gravity: wp.array[wp.vec3],
     dt: float,
@@ -163,15 +164,22 @@ def body_to_affine_kernel(
     start = 4 * body
     pose = body_q[body]
 
-    # Use semi-implicit rigid-body integration to define the inertial target pose.
+    # Kinematic targets follow prescribed velocities without force or gravity
+    # acceleration; dynamic bodies retain semi-implicit prediction.
+    inv_mass = body_inv_mass[body]
+    inv_inertia = body_inv_inertia[body]
+    if (body_flags[body] & BodyFlags.KINEMATIC) != 0:
+        inv_mass = 0.0
+        inv_inertia = wp.mat33(0.0)
+
     next_pose, _ = integrate_rigid_body(
         pose,
         body_qd[body],
         body_f[body],
         body_com[body],
         body_inertia[body],
-        body_inv_mass[body],
-        body_inv_inertia[body],
+        inv_mass,
+        inv_inertia,
         gravity[body_world[body]],
         0.0,  # angular_damping
         dt,
@@ -314,6 +322,7 @@ class AffineBody:
                 self.model.body_inertia,
                 self.model.body_inv_mass,
                 self.model.body_inv_inertia,
+                self.model.body_flags,
                 self.model.body_world,
                 self.model.gravity,
                 dt,
