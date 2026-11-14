@@ -1974,13 +1974,16 @@ def update_solver_options_kernel(
 def update_axis_properties_kernel(
     mjc_actuator_ctrl_source: wp.array[wp.int32],
     mjc_actuator_to_newton_idx: wp.array[wp.int32],
+    mjc_ball_actuator_effort_dof: wp.array[wp.int32],
     joint_target_ke: wp.array[float],
     joint_target_kd: wp.array[float],
+    joint_effort_limit: wp.array[float],
     joint_target_mode: wp.array[wp.int32],
     dofs_per_world: wp.int32,
     # outputs
     actuator_bias: wp.array2d[vec10],
     actuator_gain: wp.array2d[vec10],
+    actuator_forcerange: wp.array2d[wp.vec2],
 ):
     """Update MuJoCo actuator gains from Newton per-DOF arrays.
 
@@ -2000,8 +2003,10 @@ def update_axis_properties_kernel(
     Args:
         mjc_actuator_ctrl_source: 0=JOINT_TARGET, 1=CTRL_DIRECT
         mjc_actuator_to_newton_idx: Index into Newton array (sign-encoded for JOINT_TARGET)
+        mjc_ball_actuator_effort_dof: BALL target DOF for a dynamic actuator clamp, -1 otherwise
         joint_target_ke: Per-DOF position gains (kp)
         joint_target_kd: Per-DOF velocity/damping gains (kd)
+        joint_effort_limit: Per-DOF drive force limit
         joint_target_mode: Per-DOF target mode from Model.joint_target_mode
         dofs_per_world: Number of DOFs per world
     """
@@ -2011,6 +2016,11 @@ def update_axis_properties_kernel(
     if source != CTRL_SOURCE_JOINT_TARGET:
         # CTRL_DIRECT: gains unchanged (set from custom attributes)
         return
+
+    ball_dof = mjc_ball_actuator_effort_dof[actuator]
+    if ball_dof >= 0:
+        effort_limit = joint_effort_limit[world * dofs_per_world + ball_dof]
+        actuator_forcerange[world, actuator] = wp.vec2(-effort_limit, effort_limit)
 
     idx = mjc_actuator_to_newton_idx[actuator]
     if idx >= 0:
