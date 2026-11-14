@@ -292,7 +292,23 @@ def _mujoco_warp_deterministic_modules() -> list[Any]:
     ]
 
 
-_MUJOCO_WARP_DYNAMIC_RECORD_MODULES = frozenset({"mujoco_warp._src.smooth"})
+# MJWarp modules whose kernels use atomics inside data-dependent loops.
+# Statically bounded modules retain Warp's code-generated record bound (0)
+# instead of allocating scatter buffers for the model-derived maximum.
+# See newton-physics/newton#4140 and newton-physics/newton#4116.
+_MUJOCO_WARP_DYNAMIC_RECORD_MODULES = frozenset(
+    {
+        "mujoco_warp._src.collision_flex",
+        "mujoco_warp._src.constraint",
+        "mujoco_warp._src.derivative",
+        "mujoco_warp._src.forward",
+        "mujoco_warp._src.island",
+        "mujoco_warp._src.passive",
+        "mujoco_warp._src.sensor",
+        "mujoco_warp._src.smooth",
+        "mujoco_warp._src.solver",
+    }
+)
 
 
 def _mujoco_warp_max_constraint_row_width(mj_model: MjModel) -> int:
