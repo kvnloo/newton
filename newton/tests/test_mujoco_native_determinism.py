@@ -13,7 +13,7 @@ import warp as wp
 import newton
 from newton._src.solvers.mujoco import kernels, solver_mujoco
 from newton.solvers import SolverMuJoCo
-from newton.tests.unittest_utils import add_function_test, get_test_devices
+from newton.tests.unittest_utils import MUJOCO_MODULES, add_function_test, get_test_devices, missing_modules
 
 
 def _build_model(device):
@@ -215,11 +215,21 @@ class TestMuJoCoNativeDeterminism(unittest.TestCase):
 
 
 add_function_test(
-    TestMuJoCoNativeDeterminism, "test_native_configuration", test_native_configuration, devices=get_test_devices()
+    TestMuJoCoNativeDeterminism,
+    "test_native_configuration",
+    test_native_configuration,
+    devices=get_test_devices(),
+    requires=MUJOCO_MODULES,
 )
 
 
-add_function_test(TestMuJoCoNativeDeterminism, "test_native_rollout", test_native_rollout, devices=get_test_devices())
+add_function_test(
+    TestMuJoCoNativeDeterminism,
+    "test_native_rollout",
+    test_native_rollout,
+    devices=get_test_devices(),
+    requires=MUJOCO_MODULES,
+)
 
 
 add_function_test(
@@ -228,7 +238,38 @@ add_function_test(
     test_native_rollout,
     devices=get_test_devices(),
     use_mujoco_contacts=False,
+    requires=MUJOCO_MODULES,
 )
+
+
+class TestMuJoCoNativeOptionalDependencies(unittest.TestCase):
+    """Check that native tests are skipped in installations without the sim extra."""
+
+    def test_native_registrations_respect_missing_modules(self):
+        missing = missing_modules(MUJOCO_MODULES)
+        for prefix in (
+            "test_native_configuration",
+            "test_native_rollout",
+            "test_native_newton_contacts_rollout",
+        ):
+            registered = [
+                (name, method)
+                for name, method in vars(TestMuJoCoNativeDeterminism).items()
+                if name.startswith(prefix + "_")
+            ]
+            self.assertTrue(registered, f"No device-specific tests registered for {prefix}")
+            for name, method in registered:
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        getattr(method, "__unittest_skip__", False),
+                        bool(missing),
+                        f"Incorrect optional-dependency skip status for {name}",
+                    )
+                    if missing:
+                        self.assertEqual(
+                            getattr(method, "__unittest_skip_why__", None),
+                            f"Requires {', '.join(missing)}",
+                        )
 
 
 if __name__ == "__main__":
