@@ -271,6 +271,88 @@ add_function_test(
 )
 
 
+
+def test_cylinder_plate_threshold_cpu(test, device):
+    """Keep a near-edge cylinder on the nearby top face across the old flip threshold."""
+    test.assertFalse(device.is_cuda)
+    builder = newton.ModelBuilder()
+    cases = []
+    # Newton #4526: 1.2 m x 0.3 m plate, 10 mm thick, with an X-aligned
+    # 5 cm long, 1 cm diameter cylinder centred 4 cm from the plate end.
+    # The deep plate is a same-top-face control, in a separate world.
+    for thickness in (0.01, 0.6):
+        builder.begin_world()
+        plate = builder.add_shape_box(
+            -1,
+            xform=wp.transform(wp.vec3(0.0, 0.0, -0.5 * thickness), wp.quat_identity()),
+            hx=0.6,
+            hy=0.15,
+            hz=0.5 * thickness,
+        )
+        body = builder.add_body(xform=wp.transform(wp.vec3(0.56, 0.0, 0.005), wp.quat_identity()))
+        cylinder = builder.add_shape_cylinder(
+            body,
+            xform=wp.transform(
+                wp.vec3(0.0), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), 0.5 * wp.pi)
+            ),
+            radius=0.005,
+            half_height=0.025,
+        )
+        builder.end_world()
+        cases.append((plate, cylinder, body, thickness))
+
+    model = builder.finalize(device)
+    pipeline = newton.CollisionPipeline(model, deterministic=True)
+    state = model.state()
+    contacts = pipeline.contacts()
+    poses = state.body_q.numpy().copy()
+
+    # The former centre-ray end-face crossover is (h + sz) * (b + sx) / (L / 2 + sx).
+    crossover = (0.005 + 0.005) * (0.04 + 0.025) / (0.6 + 0.025)
+    test.assertAlmostEqual(crossover, 0.00104, places=9)
+    for penetration in (0.0008, 0.0010, crossover, 0.0011, 0.0012, 0.0020):
+        for _plate, _cylinder, body, _thickness in cases:
+            poses[body, 2] = 0.005 - penetration
+        state.body_q.assign(poses)
+        pipeline.collide(state, contacts)
+
+        count = int(contacts.rigid_contact_count.numpy()[0])
+        shape0 = contacts.rigid_contact_shape0.numpy()[:count]
+        shape1 = contacts.rigid_contact_shape1.numpy()[:count]
+        normals = contacts.rigid_contact_normal.numpy()[:count]
+        oriented = {}
+        matched = 0
+        for plate, cylinder, _body, thickness in cases:
+            with test.subTest(thickness=thickness, penetration=penetration):
+                pair = ((shape0 == plate) & (shape1 == cylinder)) | (
+                    (shape0 == cylinder) & (shape1 == plate)
+                )
+                test.assertTrue(np.any(pair))
+                matched += int(np.count_nonzero(pair))
+                sign = np.where(shape0[pair] == plate, 1.0, -1.0)
+                top_normals = normals[pair] * sign[:, None]
+                np.testing.assert_allclose(np.linalg.norm(top_normals, axis=1), 1.0, atol=1.0e-3)
+                test.assertGreater(float(np.min(top_normals[:, 2])), 0.95)
+                oriented[thickness] = np.mean(top_normals, axis=0)
+
+        test.assertEqual(matched, count)
+        # Both normals point away from the plate, independent of shape order.
+        np.testing.assert_allclose(oriented[0.6], (0.0, 0.0, 1.0), atol=1.0e-3)
+        alignment = float(
+            np.dot(oriented[0.01], oriented[0.6])
+            / (np.linalg.norm(oriented[0.01]) * np.linalg.norm(oriented[0.6]))
+        )
+        test.assertGreater(alignment, 0.99)
+
+
+add_function_test(
+    TestBoxContactNormal,
+    "test_cylinder_plate_threshold_cpu",
+    test_cylinder_plate_threshold_cpu,
+    devices=[device for device in get_test_devices() if not device.is_cuda],
+)
+
+
 def test_convex_contact_near_plate_end(test, device, *, split=False):
     """Keep shallow convex contacts on the nearby plate face in either shape order."""
     builder = newton.ModelBuilder()
