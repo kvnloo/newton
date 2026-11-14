@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import warnings
 import xml.etree.ElementTree as ET
@@ -13,6 +14,9 @@ import warp as wp
 
 from ..exceptions import NewtonWarning
 from ..geometry.types import Mesh
+
+
+logger = logging.getLogger(__name__)
 
 
 @wp.kernel
@@ -523,7 +527,7 @@ class MeshAdjacency:
                 edge_indices[edge_id, 1] = entry_opposite[entry_id]
                 edge_tri_indices[edge_id, 1] = tri_start + entry_tri[entry_id]
             else:
-                warnings.warn("Detected non-manifold edge", NewtonWarning, stacklevel=2)
+                logger.debug("Detected non-manifold edge")
 
             fill_counts[edge_id] += 1
 
@@ -2234,12 +2238,12 @@ def validate_triangle_mesh(
 
     Inspects the input triangle mesh for degenerate or sliver triangles
     and extreme interior angles. Non-manifold-edge detection is *not*
-    performed here; :class:`MeshAdjacency` emits its own warning during
+    performed here; :class:`MeshAdjacency` emits a DEBUG log during
     construction and is built by every builder path that accepts a
     triangle mesh, so going through ``add_cloth_mesh`` /
     ``add_soft_mesh`` already covers it. Standalone callers who need a
     non-manifold check should construct ``MeshAdjacency(tri_indices)``
-    themselves. Each detected problem is reported via
+    themselves. Issues found by this validator are reported via
     :func:`warnings.warn`.
 
     Args:
