@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -564,6 +565,10 @@ def parse_joint(
 
         joint_index = builder.add_joint_d6(**joint_params, linear_axes=linear_axes, angular_axes=angular_axes)
     elif key == UsdPhysics.ObjectType.DistanceJoint:
+        # USD disables NaN bounds via its >= 0 test, so inspect both raw values.
+        for bound_name, bound_value in (("min", joint_desc.limit.lower), ("max", joint_desc.limit.upper)):
+            if math.isnan(bound_value):
+                raise ValueError(f"USD joint {joint_path} has NaN {bound_name} distance limit")
         joint_index = builder.add_joint_distance(
             **joint_params,
             min_distance=joint_desc.limit.lower if joint_desc.minEnabled else -1.0,
