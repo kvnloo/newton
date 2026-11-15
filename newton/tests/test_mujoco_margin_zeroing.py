@@ -220,5 +220,141 @@ class TestMuJoCoMarginZeroing(unittest.TestCase):
                         err_msg=f"Updated {name}, skipped={skipped}",
                     )
 
+
+    def test_multiworld_pair_map_preserves_global_and_filtered_rows(self):
+        """Map each surviving pair to its own world and retain global source rows."""
+        dtypes = {
+            "pair_solref": wp.vec2,
+            "pair_solreffriction": wp.vec2,
+            "pair_solimp": vec5,
+            "pair_margin": wp.float32,
+            "pair_gap": wp.float32,
+            "pair_friction": vec5,
+        }
+
+        def properties(seed: int, changed: bool = False):
+            return {
+                "pair_solref": (0.02 + 0.002 * seed, 1.0 + 0.1 * seed),
+                "pair_solreffriction": (0.03 + 0.002 * seed, 1.1 + 0.1 * seed),
+                "pair_solimp": (0.85 + 0.01 * seed, 0.93, 0.002, 0.5, 2.0),
+                "pair_margin": (0.05 if changed else 0.01) + 0.01 * seed,
+                "pair_gap": (0.005 if changed else 0.001) + 0.001 * seed,
+                "pair_friction": (1.0 + 0.1 * seed, 1.1, 0.005, 0.0001, 0.0001),
+            }
+
+        # Each row is (world, first geom, second geom, value seed).
+        # None is an intentionally skipped, invalid first geom.
+        layouts = (
+            (
+                "interleaved",
+                ((0, "floor", "box0", 0), (1, "floor", "box1", 1),
+                 (0, None, "box0", 2), (1, None, "box1", 3)),
+                ((0,), (1,)),
+            ),
+            (
+                "shifted_skips",
+                ((0, None, "box0", 0), (0, "floor", "box0", 1),
+                 (1, "floor", "box1", 2), (1, None, "box1", 3)),
+                ((1,), (2,)),
+            ),
+            (
+                "global",
+                ((0, None, "box0", 0), (0, "floor", "box0", 1),
+                 (-1, "floor", "sphere0", 2), (1, None, "box1", 3),
+                 (1, "floor", "box1", 4)),
+                ((1, 2), (4, 2)),
+            ),
+            (
+                "unequal_valid_counts",
+                ((0, "floor", "box0", 0), (1, None, "box1", 1)),
+                None,
+            ),
+        )
+
+        for layout, rows, expected_rows in layouts:
+            with self.subTest(layout=layout):
+                template = newton.ModelBuilder()
+                body = template.add_link(
+                    mass=1.0, com=wp.vec3(0.0, 0.0, 0.0), inertia=wp.mat33(np.eye(3))
+                )
+                box = template.add_shape_box(body=body, hx=0.05, hy=0.05, hz=0.05)
+                sphere = template.add_shape_sphere(body=body, radius=0.04)
+                joint = template.add_joint_free(body)
+                template.add_articulation([joint])
+
+                builder = newton.ModelBuilder()
+                SolverMuJoCo.register_custom_attributes(builder)
+                floor = builder.add_shape_box(body=-1, hx=1.0, hy=1.0, hz=0.01)
+                first_shape = builder.shape_count
+                builder.add_world(template)
+                second_shape = builder.shape_count
+                builder.add_world(template)
+                shapes = {
+                    "floor": floor,
+                    "box0": first_shape + box,
+                    "sphere0": first_shape + sphere,
+                    "box1": second_shape + box,
+                }
+
+                for world, geom1, geom2, seed in rows:
+                    attributes = {
+                        "mujoco:pair_world": world,
+                        "mujoco:pair_geom1": -1 if geom1 is None else shapes[geom1],
+                        "mujoco:pair_geom2": shapes[geom2],
+                        "mujoco:pair_condim": 3,
+                    }
+                    for name, value in properties(seed).items():
+                        attributes[f"mujoco:{name}"] = dtypes[name](*value) if isinstance(value, tuple) else value
+                    builder.add_custom_values(**attributes)
+
+                model = builder.finalize(device="cpu")
+                self.assertEqual(model.world_count, 2)
+                self.assertEqual(model.custom_frequency_counts["mujoco:pair"], len(rows))
+                if expected_rows is None:
+                    with self.assertRaisesRegex(ValueError, "matching valid explicit pair counts"):
+                        SolverMuJoCo(model, separate_worlds=True, use_mujoco_cpu=False)
+                    continue
+
+                solver = SolverMuJoCo(model, separate_worlds=True, use_mujoco_cpu=False)
+                self.assertEqual(solver.mj_model.npair, len(expected_rows[0]))
+                np.testing.assert_array_equal(solver.mjc_pair_to_newton_pair.numpy(), expected_rows)
+
+                # Verify compiled MuJoCo pair order, not merely our source map.
+                geom_to_shape = solver.mjc_geom_to_newton_shape.numpy()[0]
+                for pair, source_row in enumerate(expected_rows[0]):
+                    first_geom = int(solver.mj_model.pair_geom1[pair])
+                    second_geom = int(solver.mj_model.pair_geom2[pair])
+                    actual = {int(geom_to_shape[first_geom]), int(geom_to_shape[second_geom])}
+                    expected = {shapes[rows[source_row][1]], shapes[rows[source_row][2]]}
+                    self.assertEqual(actual, expected)
+
+                for changed in (False, True):
+                    if changed:
+                        for name, dtype in dtypes.items():
+                            values = np.asarray(
+                                [properties(seed, changed=True)[name] for _, _, _, seed in rows],
+                                dtype=np.float32,
+                            )
+                            getattr(model.mujoco, name).assign(
+                                wp.array(values, dtype=dtype, device=model.device)
+                            )
+                        solver.notify_model_changed(ModelFlags.SHAPE_PROPERTIES)
+
+                    for name in dtypes:
+                        expected = np.asarray(
+                            [
+                                [properties(rows[source][3], changed=changed)[name] for source in world_rows]
+                                for world_rows in expected_rows
+                            ],
+                            dtype=np.float32,
+                        )
+                        np.testing.assert_allclose(
+                            getattr(solver.mjw_model, name).numpy(),
+                            expected,
+                            rtol=0,
+                            atol=1e-7,
+                            err_msg=f"{layout} {name} changed={changed}",
+                        )
+
 if __name__ == "__main__":
     unittest.main()

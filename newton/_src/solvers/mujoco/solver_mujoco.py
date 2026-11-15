@@ -3634,16 +3634,30 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
             exported_pairs.append((i, pw))
 
         if exported_pairs:
-            # The compiled MuJoCo pair indices omit filtered Newton source rows.
-            # Preserve the original row for each world before runtime updates.
-            pairs_per_world = pair_count // model.world_count
+            # Source rows can be interleaved, contain filtered pairs, or include
+            # global pairs. Match surviving local pairs by their order within
+            # each world; a global pair keeps its single source row.
+            template_rows = [i for i, pair_world_id in exported_pairs if pair_world_id >= 0]
+            world_count = max(model.world_count, 1)
+            local_rows = [
+                np.flatnonzero((pair_world == world) & (pair_geom1 >= 0) & (pair_geom2 >= 0))
+                for world in range(world_count)
+            ]
+            for world, rows in enumerate(local_rows):
+                if len(rows) != len(template_rows):
+                    raise ValueError(
+                        "SolverMuJoCo requires matching valid explicit pair counts across worlds: "
+                        f"template world {template_world} exports {len(template_rows)}, "
+                        f"world {world} has {len(rows)}."
+                    )
+            template_slots = {i: slot for slot, i in enumerate(template_rows)}
             source_rows = np.asarray(
                 [
                     [
-                        i if pw < 0 else i + (world - template_world) * pairs_per_world
+                        i if pw < 0 else int(local_rows[world][template_slots[i]])
                         for i, pw in exported_pairs
                     ]
-                    for world in range(model.world_count)
+                    for world in range(world_count)
                 ],
                 dtype=np.int32,
             )
