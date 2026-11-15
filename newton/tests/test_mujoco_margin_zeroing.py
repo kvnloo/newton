@@ -16,6 +16,7 @@ import warp as wp
 
 import newton
 from newton import ModelFlags
+from newton._src.core.types import vec5
 from newton.solvers import SolverMuJoCo
 from newton.tests.unittest_utils import MUJOCO_MODULES, requires
 
@@ -123,6 +124,101 @@ class TestMuJoCoMarginZeroing(unittest.TestCase):
                     np.testing.assert_allclose(actual_dists, expected_dists, atol=1e-6)
                     np.testing.assert_allclose(actual_margins, expected_margins, atol=1e-6)
 
+
+    def test_skipped_pair_source_row_cpu_warp(self):
+        """Copy the valid source row for every runtime pair property on CPU Warp."""
+        skipped_row = {
+            "pair_solref": (0.06, 1.1),
+            "pair_solreffriction": (0.07, 1.2),
+            "pair_solimp": (0.85, 0.93, 0.002, 0.5, 2.0),
+            "pair_margin": 0.01,
+            "pair_gap": 0.001,
+            "pair_friction": (1.0, 1.0, 0.005, 0.0001, 0.0001),
+        }
+        valid_row = {
+            "pair_solref": (0.04, 1.3),
+            "pair_solreffriction": (0.05, 1.4),
+            "pair_solimp": (0.88, 0.96, 0.003, 0.6, 2.0),
+            "pair_margin": 0.05,
+            "pair_gap": 0.004,
+            "pair_friction": (1.2, 1.2, 0.007, 0.0002, 0.0002),
+        }
+        updated_skipped = {
+            "pair_solref": (0.09, 1.8),
+            "pair_solreffriction": (0.08, 1.7),
+            "pair_solimp": (0.84, 0.92, 0.004, 0.5, 2.0),
+            "pair_margin": 0.02,
+            "pair_gap": 0.002,
+            "pair_friction": (1.1, 1.1, 0.006, 0.0003, 0.0003),
+        }
+        updated_valid = {
+            "pair_solref": (0.03, 1.2),
+            "pair_solreffriction": (0.035, 1.25),
+            "pair_solimp": (0.89, 0.97, 0.005, 0.7, 2.5),
+            "pair_margin": 0.06,
+            "pair_gap": 0.006,
+            "pair_friction": (1.4, 1.3, 0.008, 0.0004, 0.0004),
+        }
+        dtypes = {
+            "pair_solref": wp.vec2,
+            "pair_solreffriction": wp.vec2,
+            "pair_solimp": vec5,
+            "pair_margin": wp.float32,
+            "pair_gap": wp.float32,
+            "pair_friction": vec5,
+        }
+
+        # The no-skip variant protects the ordinary identity mapping.
+        for skipped in (True, False):
+            with self.subTest(skipped=skipped):
+                builder = newton.ModelBuilder()
+                SolverMuJoCo.register_custom_attributes(builder)
+                floor = builder.add_shape_box(body=-1, hx=1.0, hy=1.0, hz=0.01)
+                body = builder.add_link(mass=1.0, com=wp.vec3(0.0, 0.0, 0.0), inertia=wp.mat33(np.eye(3)))
+                box = builder.add_shape_box(body=body, hx=0.05, hy=0.05, hz=0.05)
+                joint = builder.add_joint_free(body)
+                builder.add_articulation([joint])
+
+                rows = [skipped_row, valid_row] if skipped else [valid_row]
+                for index, properties in enumerate(rows):
+                    attributes = {
+                        "mujoco:pair_world": 0,
+                        "mujoco:pair_geom1": -1 if skipped and index == 0 else floor,
+                        "mujoco:pair_geom2": box,
+                        "mujoco:pair_condim": 3,
+                    }
+                    for name, value in properties.items():
+                        attributes[f"mujoco:{name}"] = dtypes[name](*value) if isinstance(value, tuple) else value
+                    builder.add_custom_values(**attributes)
+
+                model = builder.finalize(device="cpu")
+                solver = SolverMuJoCo(model, use_mujoco_cpu=False, enable_multiccd=True)
+                self.assertEqual(solver.mj_model.npair, 1)
+                self.assertEqual(model.custom_frequency_counts["mujoco:pair"], len(rows))
+
+                for name, expected in valid_row.items():
+                    np.testing.assert_allclose(
+                        getattr(solver.mjw_model, name).numpy()[0, 0],
+                        expected,
+                        rtol=0,
+                        atol=1e-7,
+                        err_msg=f"Initial {name}, skipped={skipped}",
+                    )
+
+                changed_rows = [updated_skipped, updated_valid] if skipped else [updated_valid]
+                for name, dtype in dtypes.items():
+                    values = np.asarray([row[name] for row in changed_rows], dtype=np.float32)
+                    getattr(model.mujoco, name).assign(wp.array(values, dtype=dtype, device=model.device))
+
+                solver.notify_model_changed(ModelFlags.SHAPE_PROPERTIES)
+                for name, expected in updated_valid.items():
+                    np.testing.assert_allclose(
+                        getattr(solver.mjw_model, name).numpy()[0, 0],
+                        expected,
+                        rtol=0,
+                        atol=1e-7,
+                        err_msg=f"Updated {name}, skipped={skipped}",
+                    )
 
 if __name__ == "__main__":
     unittest.main()

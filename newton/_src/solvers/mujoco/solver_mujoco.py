@@ -3581,6 +3581,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
         pair_margin = get_numpy("pair_margin")
         pair_gap = get_numpy("pair_gap")
         pair_friction = get_numpy("pair_friction")
+        exported_pairs: list[tuple[int, int]] = []
 
         for i in range(pair_count):
             # Only include pairs from the template world or global pairs (world < 0)
@@ -3630,6 +3631,23 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 pair_kwargs["friction"] = pair_friction[i].tolist()
 
             spec.add_pair(**pair_kwargs)
+            exported_pairs.append((i, pw))
+
+        if exported_pairs:
+            # The compiled MuJoCo pair indices omit filtered Newton source rows.
+            # Preserve the original row for each world before runtime updates.
+            pairs_per_world = pair_count // model.world_count
+            source_rows = np.asarray(
+                [
+                    [
+                        i if pw < 0 else i + (world - template_world) * pairs_per_world
+                        for i, pw in exported_pairs
+                    ]
+                    for world in range(model.world_count)
+                ],
+                dtype=np.int32,
+            )
+            self.mjc_pair_to_newton_pair = wp.array(source_rows, dtype=wp.int32, device=model.device)
 
     @staticmethod
     def _validate_tendon_attributes(model: Model) -> tuple[int, int, int]:
@@ -11177,21 +11195,13 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
             attr is not None
             for attr in [pair_solref, pair_solreffriction, pair_solimp, pair_margin, pair_gap, pair_friction]
         ):
-            # Compute pairs_per_world from Newton custom attributes
-            pair_world_attr = getattr(mujoco_attrs, "pair_world", None)
-            if pair_world_attr is not None:
-                total_pairs = len(pair_world_attr)
-                pairs_per_world = total_pairs // self.model.world_count
-            else:
-                pairs_per_world = npair
-
             world_count = self.mjw_data.nworld
 
             wp.launch(
                 update_pair_properties_kernel,
                 dim=(world_count, npair),
                 inputs=[
-                    pairs_per_world,
+                    self.mjc_pair_to_newton_pair,
                     pair_solref,
                     pair_solreffriction,
                     pair_solimp,
