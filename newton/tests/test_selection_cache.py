@@ -80,6 +80,9 @@ class TestSelectionCacheLifetime(unittest.TestCase):
                 sources = [model, *states]
                 for value, source in enumerate(sources, 1):
                     source.joint_q.fill_(float(value))
+                    if source is not model:
+                        v = float(value)
+                        source.body_q.fill_(wp.transform((v, v, v), wp.quat(v, v, v, v)))
                 for value, control in enumerate(controls, 4):
                     control.joint_f.fill_(float(value))
                 buffers = [view.get_dof_positions(source) for source in sources]
@@ -157,9 +160,17 @@ class TestSelectionCacheLifetime(unittest.TestCase):
                 view.get_root_transforms(state)
                 view.get_dof_forces(control)
                 old_q, old_f = state.joint_q, control.joint_f
+                old_body_q = state.body_q
                 old_q_values, old_f_values = old_q.numpy().copy(), old_f.numpy().copy()
+                old_body_values = old_body_q.numpy().copy()
 
                 state.joint_q = wp.full(old_q.shape, 4.0, dtype=old_q.dtype, device=device)
+                state.body_q = wp.full(
+                    old_body_q.shape,
+                    wp.transform((4.0, 4.0, 4.0), wp.quat(4.0, 4.0, 4.0, 4.0)),
+                    dtype=wp.transform,
+                    device=device,
+                )
                 control.joint_f = wp.full(old_f.shape, 6.0, dtype=old_f.dtype, device=device)
                 q = view.get_dof_positions(state)
                 assert_np_equal(q.numpy(), np.full(q.shape, 4.0))
@@ -175,6 +186,7 @@ class TestSelectionCacheLifetime(unittest.TestCase):
                 # unselected coordinates of the indexed and sparse layouts keep the replacement's value
                 self.assertEqual(set(np.unique(state.joint_q.numpy())), {9.0} if layout == "dense" else {4.0, 9.0})
                 assert_np_equal(old_q.numpy(), old_q_values)
+                assert_np_equal(old_body_q.numpy(), old_body_values)
                 assert_np_equal(old_f.numpy(), old_f_values)
 
     def getters_follow_replaced_gradient(self, device):
