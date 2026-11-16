@@ -214,24 +214,14 @@ class SolverSemiImplicit(SolverBase, CouplingInterface):
         self._require_unreduced_contacts(contacts)
         self._apply_module_options()
         with wp.ScopedTimer("simulate", False):
-            particle_f = None
-            body_f = None
-
-            if state_in.particle_count:
-                particle_f = state_in.particle_f
-
-            if state_in.body_count:
-                body_f = state_in.body_f
+            # Keep external forces intact while accumulating internal forces.
+            particle_f = wp.clone(state_in.particle_f) if state_in.particle_count else None
+            body_f_work = wp.clone(state_in.body_f) if state_in.body_count else None
 
             model = self.model
 
             if control is None:
                 control = model.control(clone_variables=False)
-
-            body_f_work = body_f
-            if body_f is not None and model.joint_count and control.joint_f is not None:
-                # Avoid accumulating joint_f into the persistent state body_f buffer.
-                body_f_work = wp.clone(body_f)
 
             # damped springs
             eval_spring_forces(model, state_in, particle_f)
@@ -259,7 +249,7 @@ class SolverSemiImplicit(SolverBase, CouplingInterface):
 
             # muscles
             if False:
-                eval_muscle_forces(model, state_in, control, body_f)
+                eval_muscle_forces(model, state_in, control, body_f_work)
 
             # particle-particle interactions
             if model.particle_count > 1 and model.particle_grid is not None:
@@ -278,12 +268,16 @@ class SolverSemiImplicit(SolverBase, CouplingInterface):
             # particle shape contact
             eval_particle_body_contact_forces(model, state_in, contacts, particle_f, body_f_work)
 
-            self.integrate_particles(model, state_in, state_out, dt)
+            particle_f_prev = state_in.particle_f
+            body_f_prev = state_in.body_f
+            try:
+                if particle_f is not None:
+                    state_in.particle_f = particle_f
+                if body_f_work is not None:
+                    state_in.body_f = body_f_work
 
-            if body_f_work is body_f:
+                self.integrate_particles(model, state_in, state_out, dt)
                 self.integrate_bodies(model, state_in, state_out, dt, self.angular_damping)
-            else:
-                body_f_prev = state_in.body_f
-                state_in.body_f = body_f_work
-                self.integrate_bodies(model, state_in, state_out, dt, self.angular_damping)
+            finally:
+                state_in.particle_f = particle_f_prev
                 state_in.body_f = body_f_prev
