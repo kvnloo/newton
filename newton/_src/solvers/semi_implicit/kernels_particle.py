@@ -215,21 +215,24 @@ def eval_bending(
     e_length = wp.length(e)
 
     # Check for degenerate cases
-    if n1_length < eps or n2_length < eps or e_length < eps:
+    if e_length < eps or n1_length < eps * e_length * e_length or n2_length < eps * e_length * e_length:
         return
 
     n1_hat = n1 / n1_length
     n2_hat = n2 / n2_length
     e_hat = e / e_length
+    # Dihedral derivatives require n / |n|^2, unlike the angle calculation.
+    n1_grad = n1_hat / n1_length
+    n2_grad = n2_hat / n2_length
 
     cos_theta = wp.dot(n1_hat, n2_hat)
     sin_theta = wp.dot(wp.cross(n1_hat, n2_hat), e_hat)
     theta = wp.atan2(sin_theta, cos_theta)
 
-    d1 = -n1_hat * e_length
-    d2 = -n2_hat * e_length
-    d3 = -n1_hat * wp.dot(x1 - x4, e_hat) - n2_hat * wp.dot(x2 - x4, e_hat)
-    d4 = -n1_hat * wp.dot(x3 - x1, e_hat) - n2_hat * wp.dot(x3 - x2, e_hat)
+    d1 = -n1_grad * e_length
+    d2 = -n2_grad * e_length
+    d3 = -n1_grad * wp.dot(x1 - x4, e_hat) - n2_grad * wp.dot(x2 - x4, e_hat)
+    d4 = -n1_grad * wp.dot(x3 - x1, e_hat) - n2_grad * wp.dot(x3 - x2, e_hat)
 
     # elastic
     f_elastic = ke * (theta - rest_angle)
