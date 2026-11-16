@@ -4139,6 +4139,13 @@ def parse_mjcf(
                     # Store unresolved dampratio in biasprm[2] (USD convention).
                     biasprm = vec10(0.0, -kp, dampratio, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 ctrlrange_is_derived = inherit_actuator_range(merged_attrib, joint_name, qd_start, "ctrl")
+                if ctrl_source_val == SolverMuJoCo.CtrlSource.JOINT_TARGET and dampratio > 0.0 and kv <= 0.0:
+                    logger.warning(
+                        "MJCF position actuator '%s' specifies dampratio=%s; damping is not resolved into "
+                        "joint_target_kd until SolverMuJoCo is constructed. Other solvers do not apply this ratio.",
+                        act_name,
+                        dampratio,
+                    )
                 if ctrl_source_val == SolverMuJoCo.CtrlSource.JOINT_TARGET:
                     for i in range(total_dofs):
                         dof_idx = qd_start + i
