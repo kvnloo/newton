@@ -13,7 +13,7 @@ from ...math import (
     velocity_at_point,
 )
 from ...sim import BodyFlags, JointType, Model
-from ...sim.articulation import eval_angular_coordinates
+from ...sim.articulation import eval_angular_coordinates, joint_angle_reference
 from ...sim.contacts import contact_surface_point, contact_surface_separation
 from ...sim.joint_mimic import eval_joint_mimic_coordinate
 
@@ -2022,6 +2022,22 @@ def solve_body_joints(
             grad_2 *= scale
 
         errs = wp.vec3(err_0, err_1, err_2)
+        if ang_axis_count == 1:
+            # Shift only the 2*pi branch. Rotating and caching the child joint frame
+            # loses anchor gradients and creates false errors for oblique hinges.
+            idx = axis_start + lin_axis_count
+            axis = wp.normalize(joint_axis[idx])
+            lower = joint_limit_lower[idx]
+            upper = joint_limit_upper[idx]
+            reference = 0.0
+            if upper >= lower and upper - lower < 2.0 * wp.pi:
+                reference = joint_angle_reference(lower, upper)
+            elif joint_target_ke[idx] > 0.0:
+                reference = joint_target_q[target_axis_start + lin_axis_count]
+            signed_angle = wp.quat_twist_angle_signed(axis, rel_q)
+            two_pi = 2.0 * wp.pi
+            branch_shift = -two_pi * wp.floor((signed_angle - reference + wp.pi) / two_pi)
+            errs += axis * branch_shift
         grad_x = wp.vec3(grad_0[0], grad_1[0], grad_2[0])
         grad_y = wp.vec3(grad_0[1], grad_1[1], grad_2[1])
         grad_z = wp.vec3(grad_0[2], grad_1[2], grad_2[2])
