@@ -124,8 +124,8 @@ class IKOptimizerLBFGS:
         jacobian_mode: Jacobian backend to use.
         history_len: Number of ``(s, y)`` correction pairs retained in the
             L-BFGS history.
-        h0_scale: Scalar used for the initial inverse-Hessian
-            approximation.
+        h0_scale: Multiplier for the curvature-based inverse-Hessian
+            approximation (used directly when history is empty).
         line_search_alphas: Candidate step sizes tested in parallel during
             the line search.
         wolfe_c1: Armijo sufficient-decrease constant.
@@ -1232,9 +1232,18 @@ class IKOptimizerLBFGS:
                 for j in range(DOF):
                     q[j] = q[j] - alpha_i * y_i[j]
 
-            # Apply initial Hessian approximation in-place
+            # Scale the initial inverse Hessian using the latest accepted curvature pair.
+            initial_scale = h0_scale
+            if count > 0:
+                last = (start + count - 1) % M_HIST
+                s_last = wp.tile_load(s_history[row, last], shape=(DOF,), storage="shared")
+                y_last = wp.tile_load(y_history[row, last], shape=(DOF,), storage="shared")
+                sy = wp.tile_sum(wp.tile_map(wp.mul, s_last, y_last))
+                yy = wp.tile_sum(wp.tile_map(wp.mul, y_last, y_last))
+                if yy[0] > 1.0e-12:
+                    initial_scale = h0_scale * sy[0] / yy[0]
             for j in range(DOF):
-                q[j] = h0_scale * q[j]
+                q[j] = initial_scale * q[j]
 
             # Second loop: forward through history
             for i in range(count):
