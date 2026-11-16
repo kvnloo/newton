@@ -842,6 +842,12 @@ class SolverCoupled(SolverBase, CouplingInterface):
                 visible_bodies = {int(i) for i in cfg.bodies} | {int(i) for i in proxy_body_keep}
                 self._apply_global_shape_metadata(view, cfg, visible_bodies)
                 self._apply_noncompact_body_particle_attachment_visibility(view, cfg)
+            # A hash grid is per-step solver scratch, so sibling views must not share it.
+            if view.particle_count > 1 and model.particle_grid is not None:
+                with wp.ScopedDevice(device):
+                    view.particle_grid = wp.HashGrid(128, 128, 128)
+            else:
+                view.particle_grid = None
             self._customize_compact_view(view)
             if cfg.configure_view is not None:
                 cfg.configure_view(view)
