@@ -916,17 +916,42 @@ def parse_usd(
                 )
             return
 
-        prim_world_mat = _get_prim_world_mat(
-            prim,
-            articulation_root_xform,
-            incoming_world_xform if (parent_body_id == -1 or body_xform is not None) else None,
-        )
-        if body_xform is not None:
-            # Use the body transform used by the builder to avoid USD/physics pose mismatches.
-            body_world_mat = _xform_to_mat44(body_xform)
-            rel_mat = wp.inverse(body_world_mat) @ prim_world_mat
+        if is_site and body_xform is not None:
+            # Subtract world poses in USD double precision before the final
+            # Warp cast. Incoming/rebase rigid transforms cancel in body-local
+            # coordinates.
+            body_path = _get_rigid_body_ancestor_path(prim)
+            assert body_path is not None
+            body_prim = stage.GetPrimAtPath(body_path)
+            body_world = xform_cache.GetLocalToWorldTransform(body_prim).RemoveScaleShear()
+            site_world = xform_cache.GetLocalToWorldTransform(prim)
+            rel_mat = wp.mat44(np.asarray(site_world * body_world.GetInverse()).T)
+
+            # Gf's rigid rotation may differ from the actual builder body
+            # rotation when ancestor scale and body rotation produce shear.
+            # Re-express the precise site-relative matrix in the stored
+            # builder frame, including the importer root/axis rotations.
+            rigid_rot = usd.value_to_warp(body_world.ExtractRotationQuat())
+            if articulation_root_xform is not None:
+                rigid_rot = wp.quat_inverse(articulation_root_xform.q) * rigid_rot
+            rigid_rot = incoming_world_xform.q * rigid_rot
+            frame_rot = wp.quat_inverse(body_xform.q) * rigid_rot
+            # Ignore float32 decomposition noise when the frames coincide:
+            # the unmodified double-relative path preserves exact offsets.
+            if np.linalg.norm(np.asarray(frame_rot)[:3]) > 1.0e-6:
+                rel_mat = _xform_to_mat44(wp.transform(wp.vec3(), frame_rot)) @ rel_mat
         else:
-            rel_mat = prim_world_mat
+            prim_world_mat = _get_prim_world_mat(
+                prim,
+                articulation_root_xform,
+                incoming_world_xform if (parent_body_id == -1 or body_xform is not None) else None,
+            )
+            if body_xform is not None:
+                # Visuals follow the body transform actually used by the builder.
+                body_world_mat = _xform_to_mat44(body_xform)
+                rel_mat = wp.inverse(body_world_mat) @ prim_world_mat
+            else:
+                rel_mat = prim_world_mat
 
         xform_pos, xform_rot, scale = wp.transform_decompose(rel_mat)
         xform = wp.transform(xform_pos, xform_rot)
