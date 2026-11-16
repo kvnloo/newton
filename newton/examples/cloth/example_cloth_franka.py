@@ -262,6 +262,9 @@ class Example:
         else:
             self.viz_particle_radius = None
 
+        # Debug overlays read body COM and collision radii directly from the model.
+        self._prepare_viz_overlay_data()
+
         # The viewer bakes primitive shape dimensions (e.g. box half-extents)
         # into its geometry here, so the model must already be in meters.
         with self.viz_units():
@@ -516,12 +519,30 @@ class Example:
             self.viewer.log_state(self.viz_state)
             self.viewer.end_frame()
 
+    def _prepare_viz_overlay_data(self):
+        """Prepare meter-scale model data consumed by viewer debug overlays."""
+        self.sim_body_com = self.model.body_com
+        self.sim_shape_collision_radius = self.model.shape_collision_radius
+
+        self.viz_body_com = wp.array(
+            self.sim_body_com.numpy() * self.viz_scale,
+            dtype=self.sim_body_com.dtype,
+            device=self.model.device,
+        )
+        self.viz_shape_collision_radius = wp.array(
+            self.sim_shape_collision_radius.numpy() * self.viz_scale,
+            dtype=self.sim_shape_collision_radius.dtype,
+            device=self.model.device,
+        )
+
     @contextmanager
     def viz_units(self):
         """Temporarily swap the model's shape and particle data to meter scale for the viewer."""
         self.model.shape_transform = self.viz_shape_transform
         self.model.shape_scale = self.viz_shape_scale
         self.model.particle_radius = self.viz_particle_radius
+        self.model.body_com = self.viz_body_com
+        self.model.shape_collision_radius = self.viz_shape_collision_radius
         try:
             yield
         finally:
@@ -529,6 +550,8 @@ class Example:
             self.model.shape_transform = self.sim_shape_transform
             self.model.shape_scale = self.sim_shape_scale
             self.model.particle_radius = self.sim_particle_radius
+            self.model.body_com = self.sim_body_com
+            self.model.shape_collision_radius = self.sim_shape_collision_radius
 
     def test_final(self):
         p_lower = wp.vec3(-36.0, -95.0, -5.0)
