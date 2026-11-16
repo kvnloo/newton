@@ -1762,6 +1762,69 @@ class TestImportMjcfBasic(unittest.TestCase):
                 self.assertEqual(exported.actuator_trnid[i, 0], newton_dof[actuator_target[name]])
 
 
+class TestMjcfSlideBallFloatingBase(unittest.TestCase):
+    """Regression tests for combined MJCF slide and ball joints."""
+
+    def test_xyz_slides_and_ball_preserve_six_dofs_and_actuators(self):
+        """Import a canonical slide/ball floating base with every DOF and passive property."""
+        mjcf = """
+        <mujoco>
+            <worldbody>
+                <body name="base" pos="0.2 -0.3 0.4">
+                    <joint name="tx" type="slide" axis="1 0 0" damping="1" armature="0.1" frictionloss="0.5"/>
+                    <joint name="ty" type="slide" axis="0 1 0" damping="2" armature="0.2" frictionloss="0.6"/>
+                    <joint name="tz" type="slide" axis="0 0 1" damping="3" armature="0.3" frictionloss="0.7"/>
+                    <joint name="rot" type="ball" damping="4" armature="0.4" frictionloss="0.8"/>
+                    <geom type="sphere" size="0.05" mass="1"/>
+                </body>
+            </worldbody>
+            <actuator>
+                <position name="drive_x" joint="tx" kp="12"/>
+                <position name="drive_y" joint="ty" kp="13"/>
+                <position name="drive_z" joint="tz" kp="14"/>
+            </actuator>
+        </mujoco>
+        """
+        builder = newton.ModelBuilder()
+        SolverMuJoCo.register_custom_attributes(builder)
+        builder.add_mjcf(mjcf)
+        self.assertEqual(builder.joint_count, 1)
+        self.assertEqual(builder.joint_type[0], newton.JointType.FREE)
+        self.assertEqual(builder.joint_dof_dim[0], (3, 3))
+        self.assertEqual(builder.joint_dof_count, 6)
+        self.assertEqual(builder.joint_coord_count, 7)
+        np.testing.assert_allclose(builder.joint_armature, [0.1, 0.2, 0.3, 0.4, 0.4, 0.4])
+        np.testing.assert_allclose(builder.joint_damping, [1, 2, 3, 4, 4, 4])
+        np.testing.assert_allclose(builder.joint_friction, [0.5, 0.6, 0.7, 0.8, 0.8, 0.8])
+        np.testing.assert_allclose(builder.joint_target_ke[:3], [12, 13, 14])
+
+        model = builder.finalize(device="cpu")
+        state = model.state()
+        newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+        np.testing.assert_allclose(state.body_q.numpy()[0, :3], [0.2, -0.3, 0.4], rtol=0, atol=1.0e-6)
+
+    def test_noncanonical_ball_combinations_are_rejected(self):
+        """Reject mixed joints that cannot be represented as a canonical floating base."""
+        cases = {
+            "two_slides": '<joint type="slide" axis="1 0 0"/><joint type="slide" axis="0 1 0"/><joint type="ball"/>',
+            "hinge_and_ball": '<joint type="hinge"/><joint type="ball"/>',
+            "ball_before_slides": '<joint type="ball"/><joint type="slide"/><joint type="slide"/><joint type="slide"/>',
+            "noncanonical_axis": (
+                '<joint type="slide" axis="0 1 0"/><joint type="slide" axis="1 0 0"/>'
+                '<joint type="slide" axis="0 0 1"/><joint type="ball"/>'
+            ),
+        }
+        for case, joint_xml in cases.items():
+            with self.subTest(case=case):
+                mjcf = (
+                    '<mujoco><worldbody><body name="base">'
+                    f'{joint_xml}<geom type="sphere" size="0.05" mass="1"/>'
+                    '</body></worldbody></mujoco>'
+                )
+                with self.assertRaisesRegex(ValueError, "three canonical XYZ slide joints"):
+                    newton.ModelBuilder().add_mjcf(mjcf)
+
+
 class TestMjcfSlideCoordinateScale(unittest.TestCase):
     """Tests for scale applied to MJCF slide coordinates."""
 
