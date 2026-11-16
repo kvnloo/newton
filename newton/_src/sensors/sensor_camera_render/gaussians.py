@@ -157,7 +157,9 @@ def create_shade_function(config: RenderConfig, state: RenderContext.RenderState
                 gaussian_data.bvh_id, ray_origin_local + ray_direction_local * min_distance, ray_direction_local
             )
 
-            while wp.bvh_query_next(query, hit_index, hit_distances[-1]):
+            # A BVH box can begin beyond its Gaussian's sort key. That
+            # key cannot safely bound the remaining BVH traversal.
+            while wp.bvh_query_next(query, hit_index, max_distance - min_distance):
                 hit_alpha, hit_distance = ray_gsplat_hit_response(
                     gaussian_data.transforms[hit_index],
                     gaussian_data.scales[hit_index],
@@ -170,7 +172,8 @@ def create_shade_function(config: RenderConfig, state: RenderContext.RenderState
                     hit_distances[-1],
                 )
 
-                if hit_distance > -1:
+                # Later passes may revisit bounds for earlier sort keys.
+                if hit_distance >= min_distance:
                     if num_hits < wp.static(config.gaussians_max_num_hits):
                         num_hits += 1
 
