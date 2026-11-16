@@ -585,6 +585,56 @@ class TestMuJoCoForceProperties(unittest.TestCase):
             velocities.append(captured_out.joint_qd.numpy().copy())
         self.assertGreater(float(velocities[0][1]), float(velocities[1][1]))
 
+    def test_ball_joint_zero_effort_limit_and_runtime_updates(self):
+        """Clamp each ball-joint actuator at zero and after force-only updates on CPU."""
+        for use_mujoco_cpu in (True, False):
+            with self.subTest(use_mujoco_cpu=use_mujoco_cpu):
+                builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+                body = builder.add_link(mass=1.0, inertia=wp.mat33(np.eye(3)))
+                joint = builder.add_joint_ball(-1, body, actuator_mode=newton.JointTargetMode.VELOCITY)
+                builder.add_articulation([joint])
+                model = builder.finalize(device="cpu")
+                model.joint_effort_limit.zero_()
+                model.joint_target_kd.fill_(10.0)
+                solver = SolverMuJoCo(model, use_mujoco_cpu=use_mujoco_cpu, disable_contacts=True)
+                self.assertEqual(solver.mj_model.nu, 3)
+                np.testing.assert_array_equal(solver.mj_model.actuator_forcelimited, [True, True, True])
+
+                state, out = model.state(), model.state()
+                control = model.control()
+                control.joint_target_qd.fill_(1.0)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                # A zero limit is already active at construction. Subsequent edits
+                # must use the narrow force notification, without rebuilding.
+                for iteration, limits in enumerate(
+                    (
+                        np.zeros(3, dtype=np.float32),
+                        np.array([0.0, 0.5, 1.0], dtype=np.float32),
+                        np.zeros(3, dtype=np.float32),
+                    )
+                ):
+                    if iteration:
+                        model.joint_effort_limit.assign(limits)
+                        solver.notify_model_changed(ModelFlags.JOINT_DOF_FORCE_PROPERTIES)
+                    expected_ranges = np.column_stack((-limits, limits))
+                    np.testing.assert_allclose(
+                        solver.mjw_model.actuator_forcerange.numpy()[0], expected_ranges, atol=0.0, rtol=0.0
+                    )
+                    if use_mujoco_cpu:
+                        np.testing.assert_allclose(
+                            solver.mj_model.actuator_forcerange, expected_ranges, atol=0.0, rtol=0.0
+                        )
+
+                    solver.step(state, out, control, None, 0.002)
+                    angular_velocity = out.joint_qd.numpy()
+                    self.assertAlmostEqual(float(angular_velocity[0]), 0.0, delta=1.0e-6)
+                    if iteration == 1:
+                        self.assertGreater(abs(float(angular_velocity[1])), 1.0e-4)
+                        self.assertGreater(abs(float(angular_velocity[2])), 1.0e-4)
+                    else:
+                        np.testing.assert_allclose(angular_velocity, 0.0, atol=1.0e-6, rtol=0.0)
+
     def test_ball_spring_compatibility(self):
         """Preserve isotropic MuJoCo ball springs across rest-orientation updates."""
         builder = newton.ModelBuilder(gravity=(0, 0, 0))
