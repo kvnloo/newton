@@ -1861,6 +1861,18 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 usd_value_transformer=cls._parse_sleep_policy,
             )
         )
+        # MJCF springdamper requires reference-pose inertia, which is available after solver construction.
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="dof_springdamper",
+                frequency=AttributeFrequency.JOINT_DOF,
+                assignment=AttributeAssignment.MODEL,
+                dtype=wp.vec2,
+                default=wp.vec2(0.0, 0.0),
+                namespace="mujoco",
+                mjcf_attribute_name="springdamper",
+            )
+        )
         builder.add_custom_attribute(
             ModelBuilder.CustomAttribute(
                 name="dof_passive_stiffness",
@@ -9811,6 +9823,7 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
                 eq_data[..., 11] = 0.0
                 self.mjw_model.eq_data.assign(eq_data)
                 self.mj_model.eq_data[:, 11] = 0.0
+            self._resolve_joint_springdamper()
             self._resolve_joint_target_damping(spec, joint_target_position_rows)
             if not self.use_mujoco_cpu:
                 # Keep the host template coherent after construction. Runtime
@@ -11477,6 +11490,58 @@ class SolverMuJoCo(SolverBase, CouplingInterface):
             self.mj_model.tendon_margin[:] = self.mjw_model.tendon_margin.numpy()[0]
             self.mj_model.tendon_solimp_lim[:] = self.mjw_model.tendon_solimp_lim.numpy()[0]
             self.mj_model.tendon_armature[:] = self.mjw_model.tendon_armature.numpy()[0]
+
+    def _resolve_joint_springdamper(self) -> None:
+        """Resolve imported passive springdamper into Newton's per-world joint gains."""
+        attrs = getattr(self.model, "mujoco", None)
+        springdamper = getattr(attrs, "dof_springdamper", None)
+        if springdamper is None or self.mjc_dof_to_newton_dof is None:
+            return
+        ratios = springdamper.numpy()
+        if not np.any((ratios[:, 0] > 0.0) & (ratios[:, 1] > 0.0)):
+            return
+
+        # Kinematic locking adds synthetic armature to the compiled reference inertia.
+        # Temporarily use physical armature for the spring gains, then restore the lock.
+        lock = self._kinematic_weld_eq is not None
+        if lock:
+            self._set_const_0(lock_kinematic=False)
+        if self.use_mujoco_cpu:
+            invweight = self.mj_model.dof_invweight0.copy()[None, :]
+        else:
+            invweight = self.mjw_model.dof_invweight0.numpy().copy()
+        if lock:
+            self._set_const_0(lock_kinematic=True)
+
+        mapping = self.mjc_dof_to_newton_dof.numpy()
+        stiffness = self.model.joint_stiffness.numpy()
+        damping = self.model.joint_damping.numpy()
+        dof_starts = self.mj_model.jnt_dofadr
+        for joint, start in enumerate(dof_starts):
+            start = int(start)
+            end = int(dof_starts[joint + 1]) if joint + 1 < len(dof_starts) else self.mj_model.nv
+            for world in range(mapping.shape[0]):
+                indices = mapping[world, start:end]
+                if np.any(indices < 0):
+                    continue
+                timeconst, dampratio = ratios[indices[0]]
+                if timeconst <= 0.0 or dampratio <= 0.0:
+                    continue
+                # MuJoCo AutoSpringDamper averages inverse weights across BALL/FREE DOFs.
+                inertia = len(indices) / max(MJ_MINVAL, float(np.sum(invweight[world, start:end])))
+                stiffness[indices] = inertia / max(MJ_MINVAL, float(timeconst * timeconst * dampratio * dampratio))
+                damping[indices] = 2.0 * inertia / max(MJ_MINVAL, float(timeconst))
+                # Consume the import-only request: explicit core edits and solver rebuilds now win.
+                ratios[indices] = 0.0
+
+        self.model.joint_stiffness.assign(stiffness)
+        self.model.joint_damping.assign(damping)
+        springdamper.assign(ratios)
+        self.notify_model_changed(ModelFlags.JOINT_DOF_FORCE_PROPERTIES)
+        if not self.use_mujoco_cpu:
+            # Host MuJoCo fields are not updated by force-only MJWarp notifications.
+            self.mj_model.jnt_stiffness[:] = self.mjw_model.jnt_stiffness.numpy()[0]
+            self.mj_model.dof_damping[:] = self.mjw_model.dof_damping.numpy()[0]
 
     def _resolve_joint_target_damping(self, spec: Any, position_source_rows: dict[int, int]) -> None:
         """Resolve imported damping once, after publishing each world's inertia and gains."""
